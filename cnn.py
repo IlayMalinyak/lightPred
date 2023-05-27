@@ -20,10 +20,10 @@ import sys
 from os import path
 ROOT_DIR = path.dirname(path.dirname(path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
-from src.dataloader import TimeSeriesDataset, WaveletDataSet
-from src.models import CNN
-from src.utils import tflog2pandas as t2p
-from src.train import Trainer
+from lightPred.dataloader import TimeSeriesDataset, WaveletDataSet
+from lightPred.models import CNN
+from lightPred.utils import tflog2pandas as t2p
+from lightPred.train import Trainer
 print(f"python path {os.sys.path}")
 
 warnings.filterwarnings("ignore")
@@ -34,7 +34,7 @@ print('device is ', DEVICE)
 
 print("gpu number: ", torch.cuda.current_device())
 
-exp_num = 10
+exp_num = 13
 
 log_path = '/data/logs/freqcnn'
 
@@ -172,7 +172,7 @@ if __name__ == '__main__':
     train_dataloader = DataLoader(train_dataset, batch_size=b_size, sampler=train_sampler, \
                                                num_workers=int(os.environ["SLURM_CPUS_PER_TASK"]), pin_memory=True)
     val_dataloader = DataLoader(val_dataset, batch_size=b_size, num_workers=int(os.environ["SLURM_CPUS_PER_TASK"]),  pin_memory=True)
-    local_rank = DEVICE
+    # local_rank = DEVICE
     model = CNN(**net_params)
     model = model.to(local_rank)
     model = DDP(model, device_ids=[local_rank])

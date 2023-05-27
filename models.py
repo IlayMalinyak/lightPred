@@ -1,8 +1,92 @@
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
+from lightPred.utils import install
+try:
+    from transformers import AutoModelForSequenceClassification, BertConfig
+except ModuleNotFoundError:
+    install('transformers')
+    from transformers import AutoModelForSequenceClassification, BertConfig
 
 
+class BertClassifier(nn.Module):
+    def __init__(self, num_labels, num_classes1=100, num_classes2=90, model_name='distilbert-base-uncased', t_samples=512):
+        super().__init__()
+        self.bert = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=num_labels)
+        self.num_labels = num_labels
+        self.fc1 = nn.Linear(self.num_labels, num_classes1)
+        self.fc2 = nn.Linear(self.num_labels, num_classes2)
+        self.init_weights()
+        for name, param in self.bert.named_parameters():
+            words = name.split(".")
+            if words[1] ==  "transformer":
+                if not "layer" in words[4]:
+                    param.requires_grad=False
+        self.trainable_params = [name for name,p in self.bert.named_parameters() if p.requires_grad]
+        print("trainable_params", self.trainable_params)
+        
+    def init_weights(self):
+        nn.init.xavier_normal_(self.fc1.weight)
+        self.fc1.bias.data.fill_(0.01)
+        nn.init.xavier_normal_(self.fc2.weight)
+        self.fc2.bias.data.fill_(0.01)
+        
+    def forward(self, input_ids, attention_mask=None, labels=None):
+        outputs = self.bert(input_ids, attention_mask=attention_mask, labels=labels)[0]
+        # print("outputs.shape", outputs.shape)
+        out1 = self.fc1(outputs)
+        out2 = self.fc2(outputs)
+        # print("out1.shape", out1.shape, "out2.shape", out2.shape)
+        return out1, out2
+
+class BertRegressor(nn.Module):
+    def __init__(self, num_labels=768, model_name='distilbert-base-uncased', t_samples=512, dropout=0.3):
+        super().__init__()
+        self.bert = AutoModelForSequenceClassification.from_pretrained(model_name)
+        # self.num_labels = num_labels
+        # self.t_samples = t_samples
+        self.dropout = nn.Dropout(p=dropout)
+        self.fc1 = nn.Linear(num_labels*t_samples, 2048)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.fc3 = nn.Linear(1024, 256)
+        print("num_labels", num_labels)
+        
+        # output prediction
+        self.predict = nn.Linear(256, 2)
+
+        self.init_weights()
+        for name, param in self.bert.named_parameters():
+            words = name.split(".")
+            if words[1] ==  "transformer":
+                if not "layer" in words[4]:
+                    param.requires_grad=False
+        self.trainable_params = [name for name,p in self.bert.named_parameters() if p.requires_grad]
+        print("trainable_params", self.trainable_params)
+        
+    def init_weights(self):
+        nn.init.xavier_normal_(self.fc1.weight)
+        self.fc1.bias.data.fill_(0.01)
+        nn.init.xavier_normal_(self.fc2.weight)
+        self.fc2.bias.data.fill_(0.01)
+        nn.init.xavier_normal_(self.fc3.weight)
+        self.fc3.bias.data.fill_(0.01)
+        nn.init.xavier_normal_(self.predict.weight)
+        self.predict.bias.data.fill_(0.01)
+        
+    def forward(self, input_ids, attention_mask=None, labels=None):
+        # print("input_ids.shape", input_ids.shape)
+        out = self.bert(input_ids, attention_mask=attention_mask, labels=labels, output_hidden_states=True)
+        hidden, logits = out.hidden_states, out.logits
+        x = torch.stack(hidden).sum(0)
+        x = x.view(x.shape[0], -1)
+        # print("outputs.shape", x.shape, "logits.shape", logits.shape)
+
+        x = self.dropout(F.relu(self.fc1(x)))
+        x = self.dropout(F.relu(self.fc2(x)))
+        x = F.relu(self.fc3(x))
+        x = F.softplus(self.predict(x))
+        
+        return x.float()
 
 class CNN(nn.Module):
     """
@@ -121,12 +205,13 @@ class CNN(nn.Module):
             Output prediction.
         """
         s = torch.ones((x.shape[0], self.num_out),device=x.device)*torch.std(x)
+        # print("s.shape", s.shape,   "x.shape", x.shape)
         x = self.pool1(F.relu(self.bn1((self.dropout((self.conv1(x)))))))
-        x = self.pool_hidden(F.relu(self.bn_hidden((self.dropout((self.conv1(x)))))))
-        x = self.pool_hidden(F.relu(self.bn_hidden((self.dropout((self.conv1(x)))))))
-        x = self.pool_hidden(F.relu(self.bn_hidden((self.dropout((self.conv1(x)))))))
-        x = self.pool_hidden(F.relu(self.bn_hidden((self.dropout((self.conv1(x)))))))
-        x = self.pool2(F.relu(self.bn2((self.dropoout((self.conv2(x)))))))
+        x = self.pool_hidden(F.relu(self.bn_hidden((self.dropout((self.conv_hidden(x)))))))
+        x = self.pool_hidden(F.relu(self.bn_hidden((self.dropout((self.conv_hidden(x)))))))
+        x = self.pool_hidden(F.relu(self.bn_hidden((self.dropout((self.conv_hidden(x)))))))
+        x = self.pool_hidden(F.relu(self.bn_hidden((self.dropout((self.conv_hidden(x)))))))
+        x = self.pool2(F.relu(self.bn2((self.dropout((self.conv2(x)))))))
        
         x = x.view(-1, self.num_out)
         x = torch.cat((x, s), 1)
@@ -141,7 +226,7 @@ class CNN(nn.Module):
 class LSTM(nn.Module):
     def __init__(self, seq_len, hidden_size, num_layers, num_class1=100, num_class2=90, channels=256, dropout=0.2, stride=2):
         super(LSTM, self).__init__()
-        self. conv2d = nn.Conv1d(in_channels=1, out_channels=channels, kernel_size=3, padding=1, stride=stride)
+        self. conv = nn.Conv1d(in_channels=1, out_channels=channels, kernel_size=3, padding=1, stride=stride)
         self.lstm = nn.LSTM(channels, hidden_size, num_layers=num_layers, batch_first=True, bidirectional=True, dropout=dropout)
         self.drop = nn.Dropout1d(p=dropout)
         self.batchnorm = nn.BatchNorm1d(channels)
@@ -149,7 +234,9 @@ class LSTM(nn.Module):
         self.fc2 = nn.Linear(hidden_size*2*seq_len//stride, num_class2)
 
     def forward(self, x):
-        x_f = self.batchnorm(self.drop(self.conv2d(x)))
+        if len(x.shape) == 2:
+           x =x.unsqueeze(1).float() 
+        x_f = F.relu(self.batchnorm(self.drop(self.conv(x))))
         x_f = torch.swapaxes(x_f, 1,2)
         x_f,_ = self.lstm(x_f)
         x_f = x_f.reshape(x_f.shape[0], -1)
@@ -225,15 +312,14 @@ class CNN_B(nn.Module):
         
         # fully-connected network
         self.out_shape = self._out_shape()
-        self.num_out = self.out_shape[1]*self.out_shape[2]
-        # assert str(self.num_out)[-1] == '0'
-        self.num_out = int(self.num_out)
-        self.linear1 = nn.Linear(self.num_out, 2048)
+        print("out_shape: ", self.out_shape)
+        self.num_out = int(self.out_shape[1]*self.out_shape[2])
+        self.linear1 = nn.Linear(self.num_out*2, 2048)
         self.linear2 = nn.Linear(2048, 1024)
         self.linear3 = nn.Linear(1024, 256)
         
         # output prediction
-        self.predict = nn.Linear(256, 1)
+        self.predict = nn.Linear(256, 2)
 
     def _out_shape(self) -> int:
         """
@@ -274,10 +360,10 @@ class CNN_B(nn.Module):
             Output prediction.
         """
         s = torch.ones((x.shape[0], self.out_shape[1]*self.out_shape[2]),device=x.device)*torch.std(x)
-        print("shape of s ", s.shape, "shape of x ", x.shape)
+        # print("shape of s ", s.shape, "shape of x ", x.shape)
         x = self.pool1(F.relu(self.bn1(self.dropout(self.conv1(x)))))
         x = self.pool2(F.relu(self.bn2(self.dropout(self.conv2(x)))))
-        print("x_shape after conv", x.shape)
+        # print("x_shape after conv", x.shape)
         x = x.view(x.shape[0], -1)
         x = torch.cat((x, s), 1)
 

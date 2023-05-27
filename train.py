@@ -4,7 +4,7 @@ import numpy as np
 import time
 import os
 import yaml
-from src.utils import FitResult
+from lightPred.utils import FitResult
 
 
 class Trainer(object):
@@ -25,21 +25,25 @@ class Trainer(object):
         self.exp_num = exp_num
         self.exp_name = exp_name
         self.log_path = log_path
-        self.logger =SummaryWriter(f'{self.log_path}/exp{self.exp_num}')
-        # print(f"logger path: {self.log_path}/exp{self.exp_num}")
-        if not os.path.exists(f'{self.log_path}/exp{self.exp_num}'):
-            os.makedirs(f'{self.log_path}/exp{self.exp_num}')
-        with open(f'{self.log_path}/exp{exp_num}/net_params.yml', 'w') as outfile:
-            yaml.dump(self.net_params, outfile, default_flow_style=False)
-        with open(f'{self.log_path}/exp{exp_num}/optim_params.yml', 'w') as outfile:
-                yaml.dump(self.optim_params, outfile, default_flow_style=False)
+        if log_path is not None:
+            self.logger =SummaryWriter(f'{self.log_path}/exp{self.exp_num}')
+            # print(f"logger path: {self.log_path}/exp{self.exp_num}")
+            if not os.path.exists(f'{self.log_path}/exp{self.exp_num}'):
+                os.makedirs(f'{self.log_path}/exp{self.exp_num}')
+            with open(f'{self.log_path}/exp{exp_num}/net_params.yml', 'w') as outfile:
+                yaml.dump(self.net_params, outfile, default_flow_style=False)
+            with open(f'{self.log_path}/exp{exp_num}/optim_params.yml', 'w') as outfile:
+                    yaml.dump(self.optim_params, outfile, default_flow_style=False)
 
-    def fit(self, num_epochs, device, only_p=False):
+    def fit(self, num_epochs, device, only_p=False, early_stopping=None):
         """
         Fits the model for the given number of epochs.
         """
         min_loss = np.inf
         train_loss, train_acc, val_loss, val_acc = [], [], [], []
+        self.optim_params['lr_history'] = []
+        epochs_without_improvement = 0
+
         print(f"Starting training for {num_epochs} epochs with parameters: {self.optim_params}, {self.net_params}")
         for epoch in range(num_epochs):
             start_time = time.time()
@@ -60,10 +64,17 @@ class Trainer(object):
                 print("saving model...")
                 min_loss = v_loss
                 torch.save(self.model.state_dict(), f'{self.log_path}/exp{self.exp_num}/{self.exp_name}.pth')
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+                if epochs_without_improvement == early_stopping:
+                    print('early stopping!', flush=True)
+                    break
                 
             self.logger.add_scalar('time', time.time() - start_time, epoch)
             print(f'Epoch {epoch}: Train Loss: {t_loss:.6f}, Val Loss: {v_loss:.6f}')
             self.optim_params['lr'] = self.optimizer.param_groups[0]['lr']
+            self.optim_params['lr_history'].append(self.optim_params['lr'])
             with open(f'{self.log_path}/exp{self.exp_num}/optim_params.yml', 'w') as outfile:
                 yaml.dump(self.optim_params, outfile, default_flow_style=False)
 
@@ -96,7 +107,9 @@ class Trainer(object):
             y = y.to(device)
             self.optimizer.zero_grad()
             y_pred = self.model(x)
-            loss = self.criterion(y_pred, y) if not only_p else self.criterion(y_pred, y[:, 0])
+            dummy  = sum([p.sum() for p in self.model.parameters()])*0
+            # print("y_pred: ", y_pred.shape, "y: ", y.shape)
+            loss = self.criterion(y_pred, y) if not only_p else self.criterion(y_pred, y[:, 0]) + dummy
             # print("loss: ", loss, "y_pred: ", y_pred, "y: ", y)
             loss.backward()
             self.optimizer.step()
@@ -135,21 +148,23 @@ class ClassifierTrainer(Trainer):
             self.optimizer.zero_grad()
             y_hat_p, y_hat_i = self.model(x)
             # print(f"shapes-  y_hat_p:  {y_hat_p.shape}, y_hat_i: {y_hat_i.shape}, y_p: {y_p.shape}, y_i {y_i.shape}")
-            loss_p = self.criterion(y_hat_p, torch.nn.functional.one_hot(y[:,0], num_classes=y_hat_p.shape[1]).float())
-            loss_i = self.criterion(y_hat_i, torch.nn.functional.one_hot(y[:,1], num_classes=y_hat_i.shape[1]).float())
+            # loss_p = self.criterion(y_hat_p, torch.nn.functional.one_hot(y[:,0], num_classes=y_hat_p.shape[1]).float())
+            # loss_i = self.criterion(y_hat_i, torch.nn.functional.one_hot(y[:,1], num_classes=y_hat_i.shape[1]).float())
+            loss_p = self.criterion(y_hat_p, y[:,:y_hat_p.shape[1]])
+            loss_i = self.criterion(y_hat_i, y[:,y_hat_p.shape[1]:])
             loss = loss_p + loss_i
             # print("loss: ", loss, "y_pred: ", y_pred, "y: ", y)
             loss.backward()
             self.optimizer.step()
-            acc_p = (y_hat_p.argmax(dim=1) == y[:,0]).sum().item()
-            acc_i = (y_hat_i.argmax(dim=1) == y[:,1]).sum().item()
-            print(f"train - acc_p: {acc_p}, acc_i: {acc_i}")
+            acc_p = (y_hat_p.argmax(dim=1) == y[:,:y_hat_p.shape[1]].argmax(dim=1)).sum().item()
+            acc_i = (y_hat_i.argmax(dim=1) == y[:,y_hat_p.shape[1]:].argmax(dim=1)).sum().item()
+            # print(f"train - acc_p: {acc_p}, acc_i: {acc_i}")
             acc = (acc_p + acc_i) / 2
             train_loss += loss.item()
             train_acc += acc
         return train_loss/len(self.train_dataloader), train_acc/len(self.train_dataloader.dataset) 
     
-    def eval_epoch(self, device, only=False):
+    def eval_epoch(self, device, only_p=False):
         """
         Evaluates the model for one epoch.
         """
@@ -161,13 +176,15 @@ class ClassifierTrainer(Trainer):
             y = y.to(device)
             with torch.no_grad():
                 y_hat_p, y_hat_i = self.model(x)
-            loss_p = self.criterion(y_hat_p, torch.nn.functional.one_hot(y[:,0], num_classes=y_hat_p.shape[1]).float())
-            loss_i = self.criterion(y_hat_i, torch.nn.functional.one_hot(y[:,1], num_classes=y_hat_i.shape[1]).float())
+            # loss_p = self.criterion(y_hat_p, torch.nn.functional.one_hot(y[:,0], num_classes=y_hat_p.shape[1]).float())
+            # loss_i = self.criterion(y_hat_i, torch.nn.functional.one_hot(y[:,1], num_classes=y_hat_i.shape[1]).float())
+            loss_p = self.criterion(y_hat_p, y[:,:y_hat_p.shape[1]])
+            loss_i = self.criterion(y_hat_i, y[:,y_hat_p.shape[1]:])
             loss = loss_p + loss_i
             # print("loss: ", loss, "y_pred: ", y_pred, "y: ", y)
-            acc_p = (y_hat_p.argmax(dim=1) == y[:,0]).sum().item()
-            acc_i = (y_hat_i.argmax(dim=1) == y[:,1]).sum().item()
-            print(f"val - acc_p: {acc_p}, acc_i: {acc_i}")
+            acc_p = (y_hat_p.argmax(dim=1) == y[:,:y_hat_p.shape[1]].argmax(dim=1)).sum().item()
+            acc_i = (y_hat_i.argmax(dim=1) == y[:,y_hat_p.shape[1]:].argmax(dim=1)).sum().item()
+            # print(f"val - acc_p: {acc_p}, acc_i: {acc_i}")
             acc = (acc_p + acc_i) / 2
             val_loss += loss.item()
             val_acc += acc

@@ -5,17 +5,20 @@ import pandas as pd
 import numpy as np
 import lightkurve as lk
 import SpinSpotter as ss
-from src.utils import remove_leading_zeros
+from lightPred.utils import remove_leading_zeros
 from scipy.interpolate import interp1d
 
+min_p, max_p = 0.1, 100
+min_i, max_i = 0, np.pi/2
 
 class TimeSeriesDataset(Dataset):
-    def __init__(self, root_dir, idx_list, t_samples=512):
+    def __init__(self, root_dir, idx_list, t_samples=512, norm='std'):
         self.idx_list = idx_list
         self.length = len(idx_list)
         self.targets_path = os.path.join(root_dir, "simulation_properties.csv")
         self.lc_path = os.path.join(root_dir, "simulations")
         self.seq_len = t_samples
+        self.norm=norm
         
     def __len__(self):
         return self.length
@@ -30,11 +33,14 @@ class TimeSeriesDataset(Dataset):
           x = np.concatenate((new_t[:,None], f(new_t)[:,None]), axis=1)
         y = pd.read_csv(self.targets_path, skiprows=range(1,sample_idx+1), nrows=1)
         y = torch.tensor([y['Period'], y['Inclination']])
-        # y[0] = (y[0] - min_p)/(max_p-min_p)
-        # y[1] = (y[1] - min_i)/(max_i-min_i)
+        y[0] = (y[0] - min_p)/(max_p-min_p)
+        y[1] = (y[1] - min_i)/(max_i-min_i)
         x = torch.tensor(x.astype(np.float32))[:,1]
-        x = ((x-x.min())/(x.max()-x.min()))
-        return x.unsqueeze(dim=1), y
+        if self.norm == 'std':
+          x = ((x-x.mean())/(x.std()+1e-8))
+        elif self.norm == 'minmax':
+          x = ((x-x.min())/(x.max()-x.min())*30521).to(torch.long)
+        return x.squeeze(0), y.squeeze().float()
         
         
 class WaveletDataSet(TimeSeriesDataset):
@@ -67,13 +73,13 @@ class WaveletDataSet(TimeSeriesDataset):
       # if nans:
       #    print("numpy: there's nans in dataset!")
       x = torch.tensor(acf).float()
-      x = torch.nan_to_num((x - x.min())/(x.max()-x.min()))
+      x = torch.nan_to_num((x-x.mean())/(x.std()+1e-8))
       nans = torch.isnan(x).any()
       if nans:
           print("there's nans in dataset!")
       y = torch.tensor([y['Period'], y['Inclination']]).float()
-    #   y[0] = (y[0] - min_p)/(max_p-min_p)
-    #   y[1] = (y[1] - min_i)/(max_i-min_i)
+      y[0] = (y[0] - min_p)/(max_p-min_p)
+      y[1] = (y[1] - min_i)/(max_i-min_i)
       x = torch.unsqueeze(x, dim=0)
       return x, torch.squeeze(y,dim=-1)
   
@@ -105,12 +111,15 @@ class ClassifierDataset(TimeSeriesDataset):
       acf = np.pad(acf, ((0, to_pad)), mode='edge') if to_pad > 0 else acf[:self.t_samples]
       # x = acf/np.max(acf)
       x = torch.tensor(acf).float()
-      x = torch.nan_to_num((x - x.min())/(x.max()-x.min()))
+      x = torch.nan_to_num((x-x.mean())/(x.std()+1e-8))
       y = torch.tensor([y['Period'], y['Inclination']*180/np.pi]).to(torch.long)
+      y1 = torch.nn.functional.one_hot(y[0], num_classes=100).float().squeeze(dim=0)
+      y2 = torch.nn.functional.one_hot(y[1], num_classes=90).float().squeeze(dim=0)
+      y = torch.cat((y1, y2), dim=0)
       # print(y['Period'])
       
       x = torch.unsqueeze(torch.tensor(x), dim=0).float()
-      return x,  y.squeeze()
+      return x,  y
   
 class TimeSeriesClassifierDataset(Dataset):
     def __init__(self, root_dir, idx_list, t_samples=512):
@@ -138,4 +147,8 @@ class TimeSeriesClassifierDataset(Dataset):
                                         
         x = torch.tensor(x.astype(np.float32))[:,1]
         x = ((x-x.min())/(x.max()-x.min())*30521).to(torch.long)
-        return x, y.squeeze()
+        y1 = torch.nn.functional.one_hot(y[0], num_classes=100).float().squeeze(dim=0)
+        y2 = torch.nn.functional.one_hot(y[1], num_classes=90).float().squeeze(dim=0)
+        y = torch.cat((y1, y2), dim=0)
+        return x, y
+        # return x, y.squeeze()

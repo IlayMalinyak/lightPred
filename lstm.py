@@ -19,11 +19,12 @@ import sys
 from os import path
 ROOT_DIR = path.dirname(path.dirname(path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
+print("running from ", ROOT_DIR)    
 
-from src.dataloader import TimeSeriesDataset, WaveletDataSet, ClassifierDataset, TimeSeriesClassifierDataset
-from src.models import LSTM
-from src.utils import tflog2pandas as t2p
-from src.train import Trainer, ClassifierTrainer
+from lightPred.dataloader import *
+from lightPred.models import *
+from lightPred.utils import *
+from lightPred.train import *
 print(f"python path {os.sys.path}")
 
 warnings.filterwarnings("ignore")
@@ -34,7 +35,7 @@ print('device is ', DEVICE)
 
 print("gpu number: ", torch.cuda.current_device())
 
-exp_num = 2
+exp_num = 4
 
 log_path = '/data/logs/lstm'
 
@@ -68,9 +69,9 @@ if __name__ == '__main__':
     # optim_params = {"betas": (0.7191221416723297, 0.9991147816604715),
     # "lr": 2.4516572028943392e-05,
     # "weight_decay": 3.411877716394279e-05}
-    optim_params = {"betas": (0.9, 0.999),
-    "lr": 0.0001,
-    "weight_decay": 0.0001}
+    optim_params = {
+    "lr": 4e-5,
+    }
 
     net_params = {
  'channels': 64,
@@ -101,14 +102,16 @@ if __name__ == '__main__':
            with open(f'{log_path}/exp{exp_num}/optim_params.yml', 'r') as f:
             optim_params = yaml.load(f, Loader=yaml.FullLoader)            
     
-    train_dataset = ClassifierDataset(data_folder, train_list, t_samples=net_params['seq_len'])
-    val_dataset = ClassifierDataset(data_folder, val_list, t_samples=net_params['seq_len'])
+    train_dataset = TimeSeriesClassifierDataset(data_folder, train_list, t_samples=net_params['seq_len'])
+    val_dataset = TimeSeriesClassifierDataset(data_folder, val_list, t_samples=net_params['seq_len'])
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     train_dataloader = DataLoader(train_dataset, batch_size=b_size, sampler=train_sampler, \
                                                num_workers=int(os.environ["SLURM_CPUS_PER_TASK"]), pin_memory=True)
     val_dataloader = DataLoader(val_dataset, batch_size=b_size, num_workers=int(os.environ["SLURM_CPUS_PER_TASK"]),  pin_memory=True)
     
+    x,y = next(iter(train_dataloader))
+    print("from dataloader: ", y.shape)
     model = LSTM(**net_params)
     model = model.to(local_rank)
     model = DDP(model, device_ids=[local_rank])
@@ -117,6 +120,9 @@ if __name__ == '__main__':
     loss_fn = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), **optim_params)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, verbose=True, factor=0.1)
+
+    # find_lr(model, optimizer, loss_fn, train_dataloader, val_dataloader, device=local_rank, start_lr=1e-6, end_lr=1,
+    #          save_path=f'{log_path}/lr_find.png', num_iter=100)
     
     cls_trainer = ClassifierTrainer(model=model, optimizer=optimizer, criterion=loss_fn,
                        scheduler=scheduler, train_dataloader=train_dataloader, val_dataloader=val_dataloader,
@@ -129,16 +135,10 @@ if __name__ == '__main__':
     with open(output_filename, "w") as f:
         json.dump(results, f, indent=2)
     
-    path=f"{log_path}/exp{exp_num}" #folderpath
-    df=t2p(path)
-    new_df = pd.DataFrame(columns=df['metric'].unique())
-    # For each column in the new DataFrame, add a column with values corresponding to 'value'
-    for column in new_df:
-      new_df[column] = df[df['metric'] == column]['value']
-      new_df['epoch'] = df[df['metric'] == column]['step']
-    new_df =  new_df.groupby(['epoch']).mean()
-    print(new_df)
-    new_df.to_csv(f"{log_path}/exp{exp_num}/output.csv")
+    # path=f"{log_path}/exp{exp_num}" #folderpath
+    # df=t2p(path)
+    # print(df)
+    # df.to_csv(f"{log_path}/exp{exp_num}/output.csv")
   
       
     

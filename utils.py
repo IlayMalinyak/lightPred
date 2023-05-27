@@ -11,7 +11,28 @@ from typing import List, NamedTuple
 import itertools
 import time
 import lightkurve as lk
-from src.period_analysis import analyze_lc
+from lightPred.period_analysis import analyze_lc
+import subprocess
+import sys
+
+
+
+def install(package):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+install("torch-lr-finder")
+
+from torch_lr_finder import LRFinder
+
+
+def find_lr(model, optimizer, criterion, train_loader, val_loader, start_lr = 1e-6, end_lr=1, num_iter=100,
+            device="cuda", save_path=None):
+    lr_finder = LRFinder(model, optimizer, criterion, device=device)
+    lr_finder.range_test(train_loader, val_loader = val_loader, start_lr=start_lr, end_lr=end_lr, num_iter=num_iter)
+    ax = lr_finder.plot()
+    plt.savefig(save_path)
+    lr_finder.reset()
+
 
 
 def remove_leading_zeros(s):
@@ -93,6 +114,7 @@ def plot_fit(
     log_loss=False,
     legend=None,
     train_test_overlay: bool = False,
+    only_loss: bool = False,
 ):
     """
     Plots a FitResult object.
@@ -107,7 +129,7 @@ def plot_fit(
     """
     if fig is None:
         nrows = 1 if train_test_overlay else 2
-        ncols = 2
+        ncols = 1 if only_loss else 2 
         fig, axes = plt.subplots(
             nrows=nrows,
             ncols=ncols,
@@ -124,8 +146,8 @@ def plot_fit(
         for line in ax.lines:
             if line.get_label() == legend:
                 line.remove()
-
-    p = itertools.product(enumerate(["train", "test"]), enumerate(["loss", "acc"]))
+    metrics = ["loss"] if only_loss else ["loss", "acc"]
+    p = itertools.product(enumerate(["train", "test"]), enumerate(metrics))
     for (i, traintest), (j, lossacc) in p:
 
         ax = axes[j if train_test_overlay else i * 2 + j]
@@ -156,34 +178,59 @@ def plot_fit(
 
 def load_results(log_path, exp_num):
     fit_res = []
-    folder_path=f"{log_path}/exp{exp_num}" #folderpath
+    folder_path=f"{log_path}/{exp_num}" #folderpath
     json_files = glob.glob(folder_path + '/*.json')
     for f in json_files:
         filename = os.path.basename(f)
-        with open(filename, "r") as f:
+        file_path = os.path.join(folder_path, filename)
+        with open(file_path, "r") as f:
             output = json.load(f)
-        fit_res.append(FitResult(**output["results"]))
+        fit_res.append(FitResult(**output))
     return fit_res
 
+def plot_all(root_dir):
+    for d in os.listdir(root_dir):
+        print(d)
+        if os.path.isdir(os.path.join(root_dir, d)):
+            fit_res = load_results(root_dir, d)
+            if fit_res:
+                print("plotting fit for ", d)
+                fig, axes = plot_fit(fit_res[0], legend=d, train_test_overlay=True, only_loss=True)
+                plt.savefig(f"{root_dir}/{d}/fit.png")
 
-def evaluate_model(model, dataloader, criterion, device):
+
+def evaluate_model(model, dataloader, criterion, device, cls=False):
     total_loss  = 0
-    tot_diff = torch.zeros((0,2))
-    tot_target = torch.zeros((0,2))
+    tot_diff = torch.zeros((0,2), device=device)
+    tot_target = torch.zeros((0,2), device=device)
+    tot_output = torch.zeros((0,2), device=device)
+
     model = model.to(device)
+    print("evaluating model")
     with torch.no_grad():
         for batch_idx, (inputs, target) in enumerate(dataloader):
+            print(batch_idx)
             inputs, target= inputs.to(device), target.to(device)
             output = model(inputs)
-            loss = criterion(output, torch.squeeze(target, dim=-1))
-            total_loss += loss.item() 
-            # uncomment if target is normalized  
-            # target[:,0], output[:,0] = target[:,0]*max_p + min_p, output[:,0]*max_p + min_p
-            # target[:,1], output[:,1] = target[:,1]*max_i + min_i, output[:,1]*max_i + min_i
-            diff = np.abs(target - output)
+            # print(output, target, torch.abs(output-target)<target*0.1)
+            if not cls:
+              loss = criterion(output, torch.squeeze(target, dim=-1))
+              total_loss += loss.item() 
+            else:
+              y_hat_p, y_hat_i = output[0], output[1]
+              loss_p = criterion(y_hat_p, target[:,:y_hat_p.shape[1]])
+              loss_i = criterion(y_hat_i, target[:,y_hat_p.shape[1]:])
+              loss = loss_p + loss_i
+              total_loss += loss.item()
+              output = torch.stack((y_hat_p.argmax(dim=1), y_hat_i.argmax(dim=1)), dim=1)
+              target = torch.stack((target[:,:y_hat_p.shape[1]].argmax(dim=1), target[:,y_hat_p.shape[1]:].argmax(dim=1)), dim=1)
+            diff = torch.abs(target - output)
             tot_diff = torch.cat((tot_diff, diff))
-            tot_target = torch.cat((tot_target, target))  
-    return total_loss / len(dataloader), tot_diff, tot_target
+            tot_target = torch.cat((tot_target, target)) 
+            tot_output = torch.cat((tot_output, output))  
+ 
+    return total_loss / len(dataloader), tot_diff, tot_target, tot_output
+
 
 def evaluate_acf(root_dir, idx_list):
     total_loss  = 0
