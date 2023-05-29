@@ -23,7 +23,7 @@ ROOT_DIR = path.dirname(path.dirname(path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
 from lightPred.dataloader import *
 from lightPred.models import *
-from lightPred.utils import evaluate_model
+from lightPred.utils import *
 from lightPred.train import *
 import yaml
 import glob
@@ -71,10 +71,14 @@ def plot_eval(output, target, ten_perc, twenty_perc, xlabel, ylabel, title, data
     plt.clf()
 
 
-def eval_model(data_dir, model, test_ds, scale_target=True, scale_output=True, trained_on_ddp=True, cls=False):
+def eval_model(data_dir, model, test_ds, scale_target=True, scale_output=True,
+                trained_on_ddp=True, cls=False, norm='std', run_name='regression',
+                  group='model selection'):
+    init_wandb(group, name=f'test-{run_name}')
     with open(f'{data_dir}/net_params.yml', 'r') as f:
         net_params = yaml.safe_load(f)
     model = model(**net_params).to(DEVICE)
+    model_name = model.__class__.__name__
     state_dict_files = glob.glob(data_dir + '/*.pth')
     print(state_dict_files)
     state_dict = torch.load(state_dict_files[0],map_location=DEVICE)
@@ -94,7 +98,7 @@ def eval_model(data_dir, model, test_ds, scale_target=True, scale_output=True, t
 
 # Load the modified state dict into your model
     loss_fn = nn.MSELoss()
-    test_dataset = test_ds(data_folder, idx_list, t_samples=net_params['t_samples'])
+    test_dataset = test_ds(data_folder, idx_list, t_samples=net_params['t_samples'], norm=norm)
     test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False)
     loss, _, target, output = evaluate_model(model, test_loader, loss_fn, DEVICE, cls=cls)
     target, output = target.cpu().detach().numpy(), output.cpu().detach().numpy()
@@ -112,14 +116,29 @@ def eval_model(data_dir, model, test_ds, scale_target=True, scale_output=True, t
     twenty_perc_p = (diff[:,0] < (target[:,0]/5)).sum()/len(diff)
     twenty_perc_i = (diff[:,1] < (target[:,1]/5)).sum()/len(diff)
 
+    wandb.log({f"{model_name} acc10" : ten_perc_p, f"{model_name} acc20" : twenty_perc_p})
+    data = []
+    for i in range(len(diff)):
+            wandb.log({f"{model_name} Period" : output[i, 0], f"{model_name} Inclination" : output[i, 1],
+             "Period": target[i, 0], "Inclination": target[i,1]})
+            data.append([output[i, 0], output[i, 1], target[i, 0], target[i,1]])
+    table = wandb.Table(data=data, columns = ["Predicted Period (days)", "Predicted Inclination (deg)", "True Period (days)", "True Inclination (deg)"])
+    wandb.log({f"{model_name}-Period" : wandb.plot.scatter(table, "True Period (days)", "Predicted Period (days)",
+                                 title=f"{model_name}-Period acc10: {ten_perc_p}, acc20: {twenty_perc_p}")})
+    wandb.log({f"{model_name}-Inclination" : wandb.plot.scatter(table, "True Inclination (deg)",
+                                                                 "Predicted Inclination (deg)",
+                                                                     title=f"{model_name}-Inclination acc10: {ten_perc_i}, acc20: {twenty_perc_i}")})
+    
+
+
     plot_eval(output[:,0], target[:,0], ten_perc_p, twenty_perc_p, 'period (days)', 'prediction (days)', 'Period', data_dir)
     plot_eval(output[:,1], target[:,1], ten_perc_i, twenty_perc_i, 'inclination (deg)', 'prediction (deg)', 'Inclination', data_dir)
 
 
 
 if __name__ == '__main__': 
-    eval_model('/data/logs/bert/exp1',model=BertClassifier, test_ds=TimeSeriesClassifierDataset, scale_output=False,
-    scale_target=False, cls=True)
+    eval_model('/data/logs/bert/exp2',model=BertRegressor, test_ds=TimeSeriesDataset, norm='minmax')
+    eval_model('/data/logs/freqcnn/exp16',model=CNN_B, test_ds=TimeSeriesDataset)
     eval_model('/data/logs/freqcnn/exp15',model=CNN_B, test_ds=TimeSeriesDataset)
     eval_model('/data/logs/freqcnn/exp13',model=CNN, test_ds=WaveletDataSet)
 

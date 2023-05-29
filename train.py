@@ -72,7 +72,7 @@ class Trainer(object):
                     break
                 
             self.logger.add_scalar('time', time.time() - start_time, epoch)
-            print(f'Epoch {epoch}: Train Loss: {t_loss:.6f}, Val Loss: {v_loss:.6f}')
+            print(f'Epoch {epoch}: Train Loss: {t_loss:.6f}, Val Loss: {v_loss:.6f}, Val Acc: {v_acc:.6f}, Train Acc: {t_acc:.6f}')
             self.optim_params['lr'] = self.optimizer.param_groups[0]['lr']
             self.optim_params['lr_history'].append(self.optim_params['lr'])
             with open(f'{self.log_path}/exp{self.exp_num}/optim_params.yml', 'w') as outfile:
@@ -102,6 +102,7 @@ class Trainer(object):
         """
         self.model.train()
         train_loss = 0
+        train_acc = 0
         for x, y in self.train_dataloader:
             x = x.to(device)
             y = y.to(device)
@@ -114,7 +115,9 @@ class Trainer(object):
             loss.backward()
             self.optimizer.step()
             train_loss += loss.item()
-        return train_loss/len(self.train_dataloader), 0
+            diff = torch.abs(y_pred - y)
+            train_acc += (diff[:,0] < (y[:,0]/10)).sum().item()
+        return train_loss/len(self.train_dataloader), train_acc/len(self.train_dataloader.dataset)
 
     def eval_epoch(self, device, only_p=False):
         """
@@ -122,6 +125,7 @@ class Trainer(object):
         """
         self.model.eval()
         val_loss = 0
+        val_acc = 0
         for x, y in self.val_dataloader:
             x = x.to(device)
             y = y.to(device)
@@ -129,7 +133,9 @@ class Trainer(object):
                 y_pred = self.model(x)
             loss = self.criterion(y_pred, y) if not only_p else self.criterion(y_pred, y[:, 0])
             val_loss += loss.item()
-        return val_loss/len(self.val_dataloader), 0
+            diff = torch.abs(y_pred - y)
+            val_acc += (diff[:,0] < (y[:,0]/10)).sum().item()        
+        return val_loss/len(self.val_dataloader), val_acc/len(self.val_dataloader.dataset)
     
     
 class ClassifierTrainer(Trainer):

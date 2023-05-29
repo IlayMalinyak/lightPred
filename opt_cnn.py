@@ -45,13 +45,17 @@ Nlc = 50000
 
 test_Nlc = 1000
 
-idx_list = [f'{idx:d}'.zfill(int(np.log10(Nlc))+1) for idx in range(Nlc)]
+max_p, min_p = 60, 0.1
+
+max_i, min_i = np.pi/2, 0
+
+filtered_idx = filter_p( os.path.join(data_folder, "simulation_properties.csv"), max_p)
+
+
+idx_list = [f'{idx:d}'.zfill(int(np.log10(Nlc))+1) for idx in filtered_idx]
 
 train_list, val_list = train_test_split(idx_list, test_size=0.2, random_state=42)
 
-max_p, min_p = 100, 0.1
-
-max_i, min_i = np.pi/2, 0
 
 b_size = 256
 

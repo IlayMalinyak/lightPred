@@ -22,7 +22,7 @@ ROOT_DIR = path.dirname(path.dirname(path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
 from lightPred.dataloader import TimeSeriesDataset, WaveletDataSet
 from lightPred.models import CNN, CNN_B
-from lightPred.utils import tflog2pandas as t2p
+from lightPred.utils import filter_p
 from lightPred.train import Trainer
 print(f"python path {os.sys.path}")
 
@@ -34,7 +34,7 @@ print('device is ', DEVICE)
 
 print("gpu number: ", torch.cuda.current_device())
 
-exp_num = 16
+exp_num = 17
 
 log_path = '/data/logs/freqcnn'
 
@@ -44,13 +44,18 @@ Nlc = 50000
 
 test_Nlc = 1000
 
-idx_list = [f'{idx:d}'.zfill(int(np.log10(Nlc))+1) for idx in range(Nlc)]
+max_p, min_p = 60, 0.1
+
+max_i, min_i = np.pi/2, 0
+
+filtered_idx = filter_p( os.path.join(data_folder, "simulation_properties.csv"), max_p)
+
+idx_list = [f'{idx:d}'.zfill(int(np.log10(Nlc))+1) for idx in filtered_idx]
 
 train_list, val_list = train_test_split(idx_list, test_size=0.2, random_state=42)
 
-max_p, min_p = 100, 0.1
+print("train list shape: ", len(train_list), "val list shape: ", len(val_list))
 
-max_i, min_i = np.pi/2, 0
 
 b_size = 2048
 
@@ -121,7 +126,7 @@ if __name__ == '__main__':
     
     loss_fn = nn.MSELoss()
     optimizer = optim.AdamW(model.parameters(), **optim_params)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, verbose=True, factor=0.1)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, verbose=True, factor=0.1)
     
     trainer = Trainer(model=model, optimizer=optimizer, criterion=loss_fn,
                        scheduler=scheduler, train_dataloader=train_dataloader, val_dataloader=val_dataloader,

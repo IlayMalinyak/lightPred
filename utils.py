@@ -14,15 +14,17 @@ import lightkurve as lk
 from lightPred.period_analysis import analyze_lc
 import subprocess
 import sys
+import wandb
+from torch_lr_finder import LRFinder
+
 
 
 
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
-install("torch-lr-finder")
+# install("torch-lr-finder")
 
-from torch_lr_finder import LRFinder
 
 
 def find_lr(model, optimizer, criterion, train_loader, val_loader, start_lr = 1e-6, end_lr=1, num_iter=100,
@@ -159,7 +161,7 @@ def plot_fit(
         ax.set_title(attr)
 
         if lossacc == "loss":
-            ax.set_xlabel("Iteration #")
+            ax.set_xlabel("Epoch #")
             ax.set_ylabel("Loss")
             if log_loss:
                 ax.set_yscale("log")
@@ -179,7 +181,9 @@ def plot_fit(
 def load_results(log_path, exp_num):
     fit_res = []
     folder_path=f"{log_path}/{exp_num}" #folderpath
+    print("folder path ", folder_path, "files: ", os.listdir(folder_path))
     json_files = glob.glob(folder_path + '/*.json')
+    print("json files: ", json_files)
     for f in json_files:
         filename = os.path.basename(f)
         file_path = os.path.join(folder_path, filename)
@@ -211,8 +215,8 @@ def evaluate_model(model, dataloader, criterion, device, cls=False):
         for batch_idx, (inputs, target) in enumerate(dataloader):
             print(batch_idx)
             inputs, target= inputs.to(device), target.to(device)
+            print(inputs.shape, inputs.dtype)
             output = model(inputs)
-            # print(output, target, torch.abs(output-target)<target*0.1)
             if not cls:
               loss = criterion(output, torch.squeeze(target, dim=-1))
               total_loss += loss.item() 
@@ -230,6 +234,11 @@ def evaluate_model(model, dataloader, criterion, device, cls=False):
             tot_output = torch.cat((tot_output, output))  
  
     return total_loss / len(dataloader), tot_diff, tot_target, tot_output
+
+def filter_p(csv_path, max_p):
+    y = pd.read_csv(csv_path)
+    y = y[y['Period'] < max_p]
+    return y.index.to_numpy() 
 
 
 def evaluate_acf(root_dir, idx_list):
@@ -256,3 +265,51 @@ def evaluate_acf(root_dir, idx_list):
         tot_target = torch.cat((tot_target, y))
         print(f"time - {s- time.time()}")
     return total_loss/len(idx_list), tot_diff, tot_target
+
+def init_wandb(group, name, project="lightPred"):
+    api_key = None
+    try:
+        with open('/data/src/apikey', 'r') as f:
+            # It's assumed our file contains a single line,
+            # with our API key
+            api_key = f.read().strip()
+            print("api key found")
+    except FileNotFoundError as e:
+        print(e)
+        print("'%s' file not found" % 'apikey')
+    wandb.login(key=api_key)
+    run = wandb.init(project=project, group=group, name=name)
+
+def wandb_plot(t_data, v_data, tlabel, vlabel, title, name):
+    data = np.array([[i, t, v] for i,(t, v) in enumerate(zip(t_data, v_data))])
+    print(data.shape, data)
+    wandb.log({f"{name}-loss" : wandb.plot.line_series(
+                       xs=np.arange(len(t_data)), 
+                       ys=[*t_data, *v_data],
+                       keys=[tlabel, vlabel],
+                       title=title,
+                       xname="#Epoch"
+                       )})
+
+
+def wandb_upload(logs, exps, names,group, run_name, metric='mse'):
+    init_wandb(group=group, name=run_name)
+    for log_path, exp , name in zip(logs, exps, names):
+        print(log_path, exp, name)
+        fit_res = load_results(log_path, exp)
+        if fit_res:
+            fit_res = fit_res[0]
+        t_loss = fit_res.train_loss
+        v_loss = fit_res.test_loss
+        t_acc, v_acc = fit_res.train_acc, fit_res.test_acc
+        for i in range(len(t_loss)):
+            wandb.log({f"{name}-train {metric}" : t_loss[i], f"{name}-valildation {metric}" : v_loss[i], "Epoch": i})
+    # wandb_plot(t_loss, v_loss, "Train Loss", "Validation Loss", "Loss vs Epoch", f"{name}-{exp}-loss")
+        # wandb_plot(t_acc, v_acc, "Train Accuracy", "Validation Accuracy", "Accuracy vs Epoch", f"{name}-{exp}-acc")
+
+
+# if __name__ == "__main__":
+#     logs = ['data/logs/freqcnn', 'data/logs/freqcnn', 'data/logs/bert', 'data/logs/bert']
+#     exps = ['exp13', 'exp15', 'exp1', 'exp2']
+#     names = ['cnn-raw-2layers', 'cnn-acf-6layers', 'bert-cls', 'bert-reg']
+#     wandb_upload(logs, exps, names)

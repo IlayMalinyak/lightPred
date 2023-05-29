@@ -8,7 +8,7 @@ import SpinSpotter as ss
 from lightPred.utils import remove_leading_zeros
 from scipy.interpolate import interp1d
 
-min_p, max_p = 0.1, 100
+min_p, max_p = 0.1, 60
 min_i, max_i = 0, np.pi/2
 
 class TimeSeriesDataset(Dataset):
@@ -44,10 +44,11 @@ class TimeSeriesDataset(Dataset):
         
         
 class WaveletDataSet(TimeSeriesDataset):
-  def __init__(self, root_dir, idx_list, t_cutoff=0.4, p_samples=512, t_samples=512):
+  def __init__(self, root_dir, idx_list, t_cutoff=0.4, p_samples=512, t_samples=512, norm='std'):
     self.t_cutoff = t_cutoff
     self.p_samples = p_samples
     self.t_samples = t_samples
+    self.norm = norm
     super().__init__(root_dir, idx_list)
 
   def __getitem__(self, idx):

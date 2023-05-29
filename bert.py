@@ -93,16 +93,16 @@ if __name__ == '__main__':
     torch.cuda.set_device(local_rank)
     print(f"rank: {rank}, local_rank: {local_rank}")
 
-    if os.path.exists(f'{log_path}/exp{exp_num}/net_params.yml'):
-        with open(f'{log_path}/exp{exp_num}/net_params.yml', 'r') as f:
-            net_params = yaml.load(f, Loader=yaml.FullLoader)
-    if os.path.exists(f'{log_path}/exp{exp_num}/optim_params.yml'):
-           with open(f'{log_path}/exp{exp_num}/optim_params.yml', 'r') as f:
-            optim_params = yaml.load(f, Loader=yaml.FullLoader)
-            try:
-              del optim_params['lr_history']
-            except KeyError:
-              pass
+    # if os.path.exists(f'{log_path}/exp{exp_num}/net_params.yml'):
+    #     with open(f'{log_path}/exp{exp_num}/net_params.yml', 'r') as f:
+    #         net_params = yaml.load(f, Loader=yaml.FullLoader)
+    # if os.path.exists(f'{log_path}/exp{exp_num}/optim_params.yml'):
+    #        with open(f'{log_path}/exp{exp_num}/optim_params.yml', 'r') as f:
+    #         optim_params = yaml.load(f, Loader=yaml.FullLoader)
+    #         try:
+    #           del optim_params['lr_history']
+    #         except KeyError:
+    #           pass
             # optim_params['lr'] = optim_params['lr_history']           
     print("running exp number: ", exp_num)
     train_dataset = TimeSeriesDataset(data_folder, train_list, t_samples=512, norm='minmax')
@@ -117,12 +117,12 @@ if __name__ == '__main__':
 
     model = BertRegressor(**net_params)
     model = model.to(local_rank)
-    model = DDP(model, device_ids=[local_rank])
+    model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
     # model.load_state_dict(torch.load(f'{log_path}/exp{exp_num}/1dcnn_acf_ddp.pth'))
     
     loss_fn = nn.MSELoss()
     optimizer = optim.AdamW(model.parameters(), **optim_params)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, verbose=True, factor=0.1)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, verbose=True, factor=0.1)
 
     x,y = next(iter(train_dataloader))
     # print("shapes from dataloader: ", x.shape, y.shape)

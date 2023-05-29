@@ -26,11 +26,12 @@ from lightPred.dataloader import *
 from lightPred.models import *
 from lightPred.utils import *
 from lightPred.train import *
-try:
-    import optuna
-except ModuleNotFoundError:
-    install('optuna')
-import optuna
+# try:
+#     import optuna
+# except ModuleNotFoundError:
+#     install('optuna')
+# import optuna
+import wandb
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -45,13 +46,19 @@ Nlc = 50000
 
 test_Nlc = 1000
 
-idx_list = [f'{idx:d}'.zfill(int(np.log10(Nlc))+1) for idx in range(Nlc)]
+max_p, min_p = 60, 0.1
+
+max_i, min_i = np.pi/2, 0
+
+filtered_idx = filter_p( os.path.join(data_folder, "simulation_properties.csv"), max_p)
+
+
+idx_list = [f'{idx:d}'.zfill(int(np.log10(Nlc))+1) for idx in filtered_idx]
 
 train_list, val_list = train_test_split(idx_list, test_size=0.2, random_state=42)
 
-max_p, min_p = 100, 0.1
+print("train list shape: ", len(train_list), "val list shape: ", len(val_list))
 
-max_i, min_i = np.pi/2, 0
 
 b_size = 16
 
@@ -64,37 +71,64 @@ def setup(rank, world_size):
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
 
-def define_model(trial):
-  num_labels = trial.suggest_int("num_labales", 256,1024 ,256)
-  dropout = trial.suggest_float("dropout", 0.1, 0.5)
-  model = BertRegressor(num_labels=num_labels, dropout=dropout)
-  return model
-
   
-def objective(trial):
+def main():
+    world_size    = int(os.environ["WORLD_SIZE"])
+    rank          = int(os.environ["SLURM_PROCID"])
+    #gpus_per_node = int(os.environ["SLURM_GPUS_ON_NODE"])
+    gpus_per_node = 4
+    assert gpus_per_node == torch.cuda.device_count()
+    print(f"Hello from rank {rank} of {world_size} where there are" \
+          f" {gpus_per_node} allocated GPUs per node.", flush=True)
+
+    setup(rank, world_size)
     
+    if rank == 0: print(f"Group initialized? {dist.is_initialized()}", flush=True)
+    local_rank = rank - gpus_per_node * (rank // gpus_per_node)
+    torch.cuda.set_device(local_rank)
+    print(f"rank: {rank}, local_rank: {local_rank}")
 
-    model = define_model(trial)
-    model = model.to(DEVICE)
+    lr_t = torch.zeros(1).cuda(local_rank)
+    weight_decay_t = torch.zeros(1).cuda(local_rank)
+    dropout_t = torch.zeros(1).cuda(local_rank)
+    
+    if local_rank == 0:
+        init_wandb(group='DDP', name='bert-reg', project='lightPred')
+        lr  =  wandb.config.lr
+        weight_decay = wandb.config.weight_decay
+        dropout = wandb.config.dropout
+        lr_t.fill_(lr)
+        weight_decay_t.fill_(weight_decay)
+        dropout_t.fill_(dropout)
+
+
+    # note that we define values from `wandb.config`  
+    # instead of defining hard values
+   
+    dist.broadcast(lr_t, src=0)
+    dist.broadcast(weight_decay_t, src=0)
+    dist.broadcast(dropout_t, src=0)
+
+    model = BertRegressor(dropout=dropout)
+    # model = model.to(DEVICE)
     # model = nn.DataParallel(model)
+    model = model.to(local_rank)
+    model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
 
-
-
+    
     # b_size = trial.suggest_int("batch_size", 64, 256, 64)
-    train_idx = np.random.choice(train_list, 4000, replace=False)
-    val_idx = np.random.choice(val_list, 1000, replace=False)
+    train_idx = np.random.choice(train_list, 20000, replace=False)
+    val_idx = np.random.choice(val_list, 2000, replace=False)
     train_dataset = TimeSeriesDataset(data_folder, train_idx, t_samples=512, norm='minmax')
     val_dataset = TimeSeriesDataset(data_folder, val_idx, t_samples=512, norm='minmax')
     train_dataloader = DataLoader(train_dataset, batch_size=b_size)
     val_dataloader = DataLoader(val_dataset, batch_size=b_size)
 
-    # train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
-    # train_dataloader = DataLoader(train_dataset, batch_size=b_size, sampler=train_sampler, \
-    #                                            num_workers=int(os.environ["SLURM_CPUS_PER_TASK"]), pin_memory=True)
-    # val_dataloader = DataLoader(val_dataset, batch_size=b_size, num_workers=int(os.environ["SLURM_CPUS_PER_TASK"]),  pin_memory=True)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+    train_dataloader = DataLoader(train_dataset, batch_size=b_size, sampler=train_sampler, \
+                                               num_workers=int(os.environ["SLURM_CPUS_PER_TASK"]), pin_memory=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=b_size, num_workers=int(os.environ["SLURM_CPUS_PER_TASK"]),  pin_memory=True)
 
-    lr = trial.suggest_float("lr", 1e-5,1e-1)
-    weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-1)
 
     loss_fn = nn.MSELoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -102,25 +136,47 @@ def objective(trial):
 
     trainer = Trainer(model=model, optimizer=optimizer, criterion=loss_fn,
                     scheduler=None, train_dataloader=train_dataloader, val_dataloader=val_dataloader,
-                        device=DEVICE, optim_params={}, net_params=[], exp_num=exp_num, log_path=None,
-                        exp_name="bert")
+                        device=local_rank, optim_params={}, net_params=[], exp_num=exp_num, log_path=None,
+                        exp_name="bert-reg")
     for epoch in range(num_epochs):
-        t_loss, t_acc = trainer.train_epoch(DEVICE)
-        v_loss, v_acc = trainer.eval_epoch(DEVICE)
-        trial.report(v_loss, epoch)
+        t_loss, t_acc = trainer.train_epoch(local_rank)
+        v_loss, v_acc = trainer.eval_epoch(local_rank)
+        wandb.log({
+        'epoch': epoch, 
+        'train_acc': t_acc,
+        'train_loss': t_loss, 
+        'val_acc': v_acc, 
+        'val_loss': v_loss
+      })
+    wandb.finish()
 
         # Handle pruning based on the intermediate value.
-        if trial.should_prune():
-            raise optuna.exceptions.TrialPruned()
+        
 
-    return v_loss
-
+    # Start sweep job.
 if __name__ == "__main__":
-    try:
-        print("creating study")
-        study = optuna.create_study(study_name='bert_reg', storage='sqlite:////data/optuna/bert.db')
-    except:
-        print("loading study")
-        study = optuna.load_study(study_name='bert_reg', storage='sqlite:////data/optuna/bert.db')
-    study.optimize(lambda trial: objective(trial), n_trials=50, n_jobs=4)
-    print(study.best_params)
+    
+
+    # Define sweep config
+    sweep_configuration = {
+    'method': 'bayes',
+    'name': 'bert-reg',
+    'metric': {'goal': 'maximize', 'name': 'val_acc'},
+    'parameters': 
+    {
+        'weight_decay': {'max': 0.1, 'min': 0.01},
+        'epochs': {'values': [5, 10, 15]},
+        'lr': {'max': 0.005, 'min': 1e-5},
+        'dropout': {'max': 0.36, 'min': 0.28},
+     }
+    }
+
+# Initialize sweep by passing in config. 
+# (Optional) Provide a name of the project.
+    sweep_id = wandb.sweep(
+  sweep=sweep_configuration, 
+  project='lightPred'
+  )
+    wandb.agent(sweep_id, function=main, count=20)
+
+   

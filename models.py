@@ -2,11 +2,11 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 from lightPred.utils import install
-try:
-    from transformers import AutoModelForSequenceClassification, BertConfig
-except ModuleNotFoundError:
-    install('transformers')
-    from transformers import AutoModelForSequenceClassification, BertConfig
+# try:
+#     from transformers import AutoModelForSequenceClassification, BertConfig
+# except ModuleNotFoundError:
+#     install('transformers')
+from transformers import AutoModelForSequenceClassification, BertConfig
 
 
 class BertClassifier(nn.Module):
@@ -42,19 +42,19 @@ class BertClassifier(nn.Module):
 class BertRegressor(nn.Module):
     def __init__(self, num_labels=768, model_name='distilbert-base-uncased', t_samples=512, dropout=0.3):
         super().__init__()
-        self.bert = AutoModelForSequenceClassification.from_pretrained(model_name)
+        self.bert = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=num_labels)
         # self.num_labels = num_labels
         # self.t_samples = t_samples
         self.dropout = nn.Dropout(p=dropout)
-        self.fc1 = nn.Linear(num_labels*t_samples, 2048)
-        self.fc2 = nn.Linear(2048, 1024)
-        self.fc3 = nn.Linear(1024, 256)
+        self.fc1 = nn.Linear(num_labels, 256)
+        # self.fc2 = nn.Linear(2048, 1024)
+        # self.fc3 = nn.Linear(1024, 256)
         print("num_labels", num_labels)
         
         # output prediction
         self.predict = nn.Linear(256, 2)
 
-        self.init_weights()
+        # self.init_weights()
         for name, param in self.bert.named_parameters():
             words = name.split(".")
             if words[1] ==  "transformer":
@@ -63,29 +63,30 @@ class BertRegressor(nn.Module):
         self.trainable_params = [name for name,p in self.bert.named_parameters() if p.requires_grad]
         print("trainable_params", self.trainable_params)
         
-    def init_weights(self):
-        nn.init.xavier_normal_(self.fc1.weight)
-        self.fc1.bias.data.fill_(0.01)
-        nn.init.xavier_normal_(self.fc2.weight)
-        self.fc2.bias.data.fill_(0.01)
-        nn.init.xavier_normal_(self.fc3.weight)
-        self.fc3.bias.data.fill_(0.01)
-        nn.init.xavier_normal_(self.predict.weight)
-        self.predict.bias.data.fill_(0.01)
+    # def init_weights(self):
+    #     nn.init.xavier_normal_(self.fc1.weight)
+    #     self.fc1.bias.data.fill_(0.01)
+    #     nn.init.xavier_normal_(self.fc2.weight)
+    #     self.fc2.bias.data.fill_(0.01)
+    #     nn.init.xavier_normal_(self.fc3.weight)
+    #     self.fc3.bias.data.fill_(0.01)
+    #     nn.init.xavier_normal_(self.predict.weight)
+    #     self.predict.bias.data.fill_(0.01)
         
     def forward(self, input_ids, attention_mask=None, labels=None):
         # print("input_ids.shape", input_ids.shape)
         out = self.bert(input_ids, attention_mask=attention_mask, labels=labels, output_hidden_states=True)
         hidden, logits = out.hidden_states, out.logits
-        x = torch.stack(hidden).sum(0)
-        x = x.view(x.shape[0], -1)
+        hidden = torch.stack(hidden).sum(0).sum(1)
+        # x = torch.cat((hidden, logits), dim=1)
+        x = logits
+        # x = x.view(x.shape[0], -1)
         # print("outputs.shape", x.shape, "logits.shape", logits.shape)
 
         x = self.dropout(F.relu(self.fc1(x)))
-        x = self.dropout(F.relu(self.fc2(x)))
-        x = F.relu(self.fc3(x))
+        # x = self.dropout(F.relu(self.fc2(x)))
+        # x = F.relu(self.fc3(x))
         x = F.softplus(self.predict(x))
-        
         return x.float()
 
 class CNN(nn.Module):
@@ -359,6 +360,8 @@ class CNN_B(nn.Module):
         x : array_like
             Output prediction.
         """
+        if len(x.shape) == 2:
+            x = x.unsqueeze(1)
         s = torch.ones((x.shape[0], self.out_shape[1]*self.out_shape[2]),device=x.device)*torch.std(x)
         # print("shape of s ", s.shape, "shape of x ", x.shape)
         x = self.pool1(F.relu(self.bn1(self.dropout(self.conv1(x)))))
