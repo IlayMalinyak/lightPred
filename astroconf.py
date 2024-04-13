@@ -50,7 +50,7 @@ print('device is ', DEVICE)
 
 print("gpu number: ", torch.cuda.current_device())
 
-exp_num = 44
+exp_num = 100
 
 log_path = '/data/logs/astroconf'
 
@@ -128,7 +128,6 @@ if __name__ == '__main__':
         'kernel_size': 4,
         'num_classes': len(class_labels)*2,
         'num_layers': 5,
-        'predict_size': 128,
         'seq_len': int(dur/cad*DAY2MIN),
         'stride': 4}
     # 'num_att_layers':2,
@@ -252,23 +251,24 @@ if __name__ == '__main__':
 
     conf_model, _, scheduler, scaler = init_train(args, local_rank)
     conf_model.pred_layer = nn.Identity()
-    model = LSTM_DUAL(conf_model, encoder_dims=args.encoder_dim, **lstm_params)
+    model = LSTM_DUAL(conf_model, encoder_dims=args.encoder_dim,
+                       lstm_args=lstm_params, predict_size=128, num_classes=len(class_labels)*2)
 
     # model = conf_model
 
 
 
 
-    state_dict = torch.load(f'{log_path}/exp31/astroconf.pth')
-    new_state_dict = OrderedDict()
-    for key, value in state_dict.items():
-        if key.startswith('module.'):
-            while key.startswith('module.'):
-                key = key[7:]
-        new_state_dict[key] = value
-    state_dict = new_state_dict
-    print("loading state dict...")
-    model.load_state_dict(new_state_dict)
+    # state_dict = torch.load(f'{log_path}/exp31/astroconf.pth')
+    # new_state_dict = OrderedDict()
+    # for key, value in state_dict.items():
+    #     if key.startswith('module.'):
+    #         while key.startswith('module.'):
+    #             key = key[7:]
+    #     new_state_dict[key] = value
+    # state_dict = new_state_dict
+    # print("loading state dict...")
+    # model.load_state_dict(new_state_dict)
 
     # state_dict = torch.load(f'/data/logs/lstm_attn/exp77/lstm_attn_acc2.pth')
     # new_state_dict = OrderedDict()
@@ -287,11 +287,6 @@ if __name__ == '__main__':
     
     loss_fn = nn.L1Loss()
     optimizer = optim.AdamW(model.parameters(), **optim_params)
-
-    # loss_fn = nn.MSELoss()
-    # loss_fn = nn.SmoothL1Loss(beta=0.0005)
-    # loss_fn = WeightedMSELoss(factor=1.2)
-    # loss_fn = nn.GaussianNLLLoss()
 
     data_dict = {'dataset': train_dataset.__class__.__name__,
                    'transforms': transform,  'batch_size': b_size,
@@ -313,14 +308,14 @@ if __name__ == '__main__':
                          optim_params=optim_params, net_params=lstm_params,
                            exp_num=exp_num, log_path=log_path,
                         exp_name="astroconf") 
-    # fit_res = trainer.fit(num_epochs=num_epochs, device=local_rank,
-    #                        early_stopping=40, only_p=False, best='loss', conf=True) 
-    # output_filename = f'{log_path}/exp{exp_num}/astroconf.json'
-    # with open(output_filename, "w") as f:
-    #     json.dump(fit_res, f, indent=2)
-    # fig, axes = plot_fit(fit_res, legend=exp_num, train_test_overlay=True)
-    # plt.savefig(f"{log_path}/exp{exp_num}/fit.png")
-    # plt.clf()
+    fit_res = trainer.fit(num_epochs=num_epochs, device=local_rank,
+                           early_stopping=40, only_p=False, best='loss', conf=True) 
+    output_filename = f'{log_path}/exp{exp_num}/astroconf.json'
+    with open(output_filename, "w") as f:
+        json.dump(fit_res, f, indent=2)
+    fig, axes = plot_fit(fit_res, legend=exp_num, train_test_overlay=True)
+    plt.savefig(f"{log_path}/exp{exp_num}/fit.png")
+    plt.clf()
 
     print("Evaluation on test set:")
 

@@ -436,16 +436,14 @@ class LSTM_ATTN_QUANT(LSTM):
         # conf = self.fc4(self.activation(self.fc3(values)))
         return out.transpose(1,2)
 
-class LSTM_DUAL(LSTM_ATTN):
-    def __init__(self, dual_model, encoder_dims, lstm_model=None, freeze=False, **kwargs):
+class LSTM_DUAL(nn.Module):
+    def __init__(self, dual_model, encoder_dims, lstm_args, predict_size, num_classes=4, freeze=False, **kwargs):
         super(LSTM_DUAL, self).__init__(**kwargs)
         # print("intializing dual model")
-        if lstm_model is not None:
-            self.feature_extractor = lstm_model.feature_extractor
-            self.attention = lstm_model.attention
-            if freeze:
-                for param in self.feature_extractor.parameters():
-                    param.requires_grad = False
+        self.feature_extractor = LSTMFeatureExtractor(**lstm_args)
+        if freeze:
+            for param in self.feature_extractor.parameters():
+                param.requires_grad = False
                 # for param in self.attention.parameters():
                 #     param.requires_grad = False
         num_lstm_features = self.feature_extractor.hidden_size*2
@@ -453,11 +451,33 @@ class LSTM_DUAL(LSTM_ATTN):
         self.output_dim = self.num_features
         self.dual_model = dual_model
         self.pred_layer = nn.Sequential(
-        nn.Linear(self.num_features, self.predict_size),
+        nn.Linear(self.num_features, predict_size),
         nn.GELU(),
         nn.Dropout(p=0.3),
-        nn.Linear(self.predict_size,self.num_classes),
-    )
+        nn.Linear(predict_size,num_classes//2),
+    )   
+        self.conf_layer = nn.Sequential(
+        nn.Linear(16, 16),
+        nn.GELU(),
+        nn.Dropout(p=0.3),
+        nn.Linear(16,num_classes//2),)
+
+    def lstm_attention(self, query, keys, values):
+        # Query = [BxQ]
+        # Keys = [BxTxK]
+        # Values = [BxTxV]
+        # Outputs = a:[TxB], lin_comb:[BxV]
+
+        # Here we assume q_dim == k_dim (dot product attention)
+        scale = 1/(keys.size(-1) ** -0.5)
+        query = query.unsqueeze(1) # [BxQ] -> [Bx1xQ]
+        keys = keys.transpose(1,2) # [BxTxK] -> [BxKxT]
+        energy = torch.bmm(query, keys) # [Bx1xQ]x[BxKxT] -> [Bx1xT]
+        energy = F.softmax(energy.mul_(scale), dim=2) # scale, normalize
+
+        linear_combination = torch.bmm(energy, values).squeeze(1) #[Bx1xT]x[BxTxV] -> [BxV]
+        return linear_combination
+    
     def forward(self, x, x_dual=None, acf_phr=None):
         if x_dual is None:
             x, x_dual = x[:,0,:], x[:,1,:]
@@ -465,16 +485,18 @@ class LSTM_DUAL(LSTM_ATTN):
             x = x.unsqueeze(1)
         x, h_f, c_f = self.feature_extractor(x, return_cell=True) # [B, L//stride, 2*hidden_size], [B, 2*nlayers, hidden_szie], [B, 2*nlayers, hidden_Size]
         c_f = torch.cat([c_f[-1], c_f[-2]], dim=1) # [B, 2*hidden_szie]
-        t_features = self.attention(c_f, x, x) # [B, 2*hidden_size]
+        t_features = self.lstm_attention(c_f, x, x) # [B, 2*hidden_size]
         d_features, _ = self.dual_model(x_dual) # [B, encoder_dims]
         features = torch.cat([t_features, d_features], dim=1) # [B, 2*hidden_size + encoder_dims]
-        # if acf_phr is not None:
-        #     phr = acf_phr.reshape(-1,1).float()
-        # else:
-        #     phr = torch.zeros(features.shape[0],1, device=features.device)
-        # features = torch.cat([features, phr], dim=1)
         out = self.pred_layer(features)
-        return out
+        if acf_phr is not None:
+            phr = acf_phr.reshape(-1,1).float().to(features.device)
+        else:
+            phr = torch.zeros(features.shape[0],1, device=features.device)
+        mean_features = torch.nn.functional.adaptive_avg_pool1d(features.unsqueeze(1), 16).squeeze(1)
+        mean_features += phr
+        conf = self.conf_layer(mean_features)
+        return torch.cat([out, conf], dim=1)
 
 class EncoderDecoder(torch.nn.Module):
     def __init__(self, encoder, decoder):

@@ -34,6 +34,15 @@ class Astroconformer(nn.Module):
     )
     if getattr(args, 'mean_label', False):
       self.pred_layer[3].bias.data.fill_(args.mean_label)
+  
+    self.init_weights()
+
+  def init_weights(self):
+    for m in self.modules():
+        if isinstance(m, nn.Linear):
+            torch.nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                torch.nn.init.constant_(m.bias, 0)
     
   def forward(self, inputs: Tensor) -> Tensor:
     x = inputs #initial input_size: [B, L]

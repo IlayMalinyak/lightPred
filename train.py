@@ -444,7 +444,8 @@ class DoubleInputTrainer(Trainer):
         confs = np.zeros((0, self.num_classes))
         tot_kic = []
         tot_teff = []
-        for i,(x,y,_,info) in enumerate(test_dataloader):
+        pbar = tqdm(test_dataloader)
+        for i,(x,y,_,info) in enumerate(pbar):
             x1, x2 = x[:, 0, :], x[:, 1, :]
             x1 = x1.to(device)
             x2 = x2.to(device)

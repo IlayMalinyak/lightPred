@@ -380,9 +380,10 @@ class PeriodNorm():
         return f"PeriodNorm(num_ps={self.num_ps}, orig_freq={self.orig_freq})"
 
 class ACF():
-    def __init__(self, max_lag=None, prom=0.001):
+    def __init__(self, max_lag=None, prom=0.001, phr=False):
         self.max_lag = max_lag
         self.prom = prom
+        self.phr = phr
     def __call__(self, x, mask=None, info=None, step=None):
         if isinstance(x, np.ndarray):
             # x_no_nans = x.copy()
@@ -392,12 +393,13 @@ class ACF():
             if mask is not None:
                 acf[mask] = np.nan
             x = np.hstack((acf, x))
-            peaks, _ = find_peaks(x[:,0], distance=5, prominence=self.prom)
-            if len(peaks) >= 2:
-                phr = (acf[peaks[0]] / acf[peaks[1]])[0]
-            else:
-                phr = 0
-            info['acf_phr'] = phr
+            if self.phr:
+                peaks, _ = find_peaks(x[:,0], distance=5, prominence=self.prom)
+                if len(peaks) >= 2:
+                    phr = (acf[peaks[0]] / acf[peaks[1]])[0]
+                else:
+                    phr = 0
+                info['acf_phr'] = phr
         else:
             acf = autocorrelation(x, dim=0)
             if mask is not None:
