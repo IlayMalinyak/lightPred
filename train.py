@@ -423,8 +423,6 @@ class DoubleInputTrainer(Trainer):
             #     self.logger.add_scalar('validation_loss', loss.item(), i + epoch*len(self.train_dl))
             val_loss.append(loss.item())
             diff = torch.abs(y_pred - y)
-            # print("diff: ", diff.shape, "y: ", y.shape)
-            # val_acc += (diff[:,0] < (y[:,0]/10)).sum().item()
             all_acc = (diff < (y/10)).sum(0)
             pbar.set_description(f"val_acc: {all_acc}, val_loss:  {loss.item()}")
             all_accs = all_accs + all_acc  
@@ -449,14 +447,18 @@ class DoubleInputTrainer(Trainer):
             x1, x2 = x[:, 0, :], x[:, 1, :]
             x1 = x1.to(device)
             x2 = x2.to(device)
+            y = y.to(device)
             with torch.no_grad():
-                # if 'acf_phr' in info:
-                #     y_pred = self.model(x1.float(), x2.float(), acf_phr=info['acf_phr'])
-                # else:
-                y_pred = self.model(x1.float(), x2.float())
+                if 'acf_phr' in info:
+                    y_pred = self.model(x1.float(), x2.float(), acf_phr=info['acf_phr'])
+                else:
+                    y_pred = self.model(x1.float(), x2.float())
                 # print(i, " y_pred: ", y_pred, "y: ", y)
                 if conf:
                     y_pred, conf_pred = y_pred[:, :self.num_classes], y_pred[:, self.num_classes:]
+            loss = self.criterion(y_pred, y)
+            diff = torch.abs(y_pred - y)
+            all_acc = (diff < (y/10)).sum(0)
             preds = np.concatenate((preds, y_pred.cpu().numpy()))
             if y.shape[1] == self.num_classes:
                 targets = np.concatenate((targets, y.cpu().numpy()))
@@ -464,6 +466,7 @@ class DoubleInputTrainer(Trainer):
                 confs = np.concatenate((confs, conf_pred.cpu().numpy()))
             if i >= self.max_iter:
                 break
+            pbar.set_description(f"test_acc: {all_acc}, test_loss:  {loss.item()}")
         print("target len: ", len(targets), "dataset: ", len(test_dataloader.dataset))
         return preds, targets, confs
     

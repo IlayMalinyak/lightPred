@@ -116,11 +116,19 @@ def dataset_weights(dl, Nlc):
 
 
 
-def load_model(data_dir, model, distribute, device, to_ddp=False):
+def load_model(data_dir, model, distribute, device, to_ddp=False, load_params=False):
     print("data dir ", data_dir)
-    with open(f'{data_dir}/net_params.yml', 'r') as f:
-        net_params = yaml.load(f, Loader=yaml.FullLoader)
-    model = model(**net_params).to(device)
+    if load_params:
+        try:
+            with open(f'{data_dir}/net_params.yml', 'r') as f:
+                net_params = yaml.load(f, Loader=yaml.FullLoader)
+            model = model(**net_params).to(device)
+        except FileNotFoundError:
+            net_params = None
+            model = model.to(device)
+    else:
+        net_params = None
+        model = model.to(device)
     model_name = model.__class__.__name__
     state_dict_files = glob.glob(data_dir + '/*.pth')
     print("loading model from ", state_dict_files[-1])

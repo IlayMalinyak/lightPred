@@ -181,22 +181,31 @@ if __name__ == '__main__':
     # noise_ds = KeplerDataset(kepler_data_folder, path_list=None, df=merged_df,
     # transforms=kep_transform, acf=False, norm='none')
 
+    # transform = Compose([RandomCrop(int(dur/cad*DAY2MIN)),
+    #                      KeplerNoiseAddition(noise_dataset=None, noise_path='/data/lightPred/data/noise',
+    #                       transforms=kep_transform), 
+    #                      MovingAvg(49), Detrend(), ACF(), Normalize('std'), ToTensor(), ])
+    # test_transform = Compose([RandomCrop(int(dur/cad*DAY2MIN)),
+    #                           KeplerNoiseAddition(noise_dataset=None, noise_path='/data/lightPred/data/noise',
+    #                       transforms=kep_transform),
+    #                           MovingAvg(49), Detrend(), ACF(), Normalize('std'), ToTensor(),])
+
     transform = Compose([RandomCrop(int(dur/cad*DAY2MIN)),
                          KeplerNoiseAddition(noise_dataset=None, noise_path='/data/lightPred/data/noise',
-                          transforms=kep_transform),
-                         MovingAvg(49), Detrend(), ACF(), Normalize('std'), ToTensor(), ])
-    test_transform = Compose([Slice(0, int(dur/cad*DAY2MIN)),
+                          transforms=kep_transform), 
+                         MovingAvg(49), Detrend(), ])
+    test_transform = Compose([RandomCrop(int(dur/cad*DAY2MIN)),
                               KeplerNoiseAddition(noise_dataset=None, noise_path='/data/lightPred/data/noise',
                           transforms=kep_transform),
-                              MovingAvg(49), Detrend(), ACF(), Normalize('std'), ToTensor(),])
+                              MovingAvg(49), Detrend(), ])
 
    
-    train_dataset = TimeSeriesDataset(data_folder, train_list, labels=class_labels, transforms=transform,
-    init_frac=0.2,  prepare=False, dur=dur, freq_rate=freq_rate, period_norm=False)
-    val_dataset = TimeSeriesDataset(data_folder, val_list, labels=class_labels,  transforms=transform,
-     init_frac=0.2, prepare=False, dur=dur, freq_rate=freq_rate, period_norm=False)
-    test_dataset = TimeSeriesDataset(test_folder, test_idx_list, labels=class_labels, transforms=test_transform,
-    init_frac=0.2,  prepare=False, dur=dur, freq_rate=freq_rate, period_norm=False)
+    train_dataset = TimeSeriesDatasetLegacy(data_folder, train_list, labels=class_labels, transforms=transform,
+    init_frac=0.2,  prepare=False, dur=dur, freq_rate=freq_rate,acf=True, return_raw=True)
+    val_dataset = TimeSeriesDatasetLegacy(data_folder, val_list, labels=class_labels,  transforms=transform,
+     init_frac=0.2, prepare=False, dur=dur, freq_rate=freq_rate, acf=True, return_raw=True, )
+    test_dataset = TimeSeriesDatasetLegacy(test_folder, test_idx_list, labels=class_labels, transforms=test_transform,
+    init_frac=0.2,  prepare=False, dur=dur, freq_rate=freq_rate,acf=True, return_raw=True)
   
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
@@ -223,20 +232,6 @@ if __name__ == '__main__':
     print("average time: ", np.mean(profile))
     
 
-    # print("check weights...")
-    # incs = torch.zeros(0)
-    # for i, (x,y,_,_) in enumerate(test_dataloader):
-    #     print(i)
-    #     incs = torch.cat((incs, y[:,0]*90), dim=0)
-    # plt.hist(incs.squeeze(), 80)
-    # plt.savefig('/data/tests/incs_hist_test_lstm_attn.png')
-    # plt.clf()
-    # print("done")
-    # train_dataset = TimeSeriesDataset(data_folder, train_list, t_samples=net_params['seq_len'])
-    # val_dataset = TimeSeriesDataset(data_folder, val_list, t_samples=net_params['seq_len'])
-    # test_dataset = TimeSeriesDataset(test_folder, test_idx_list, t_samples=net_params['seq_len'])
-
-
     # train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     # train_dataloader = DataLoader(train_dataset, batch_size=b_size, sampler=train_sampler, \
     #                                            num_workers=int(os.environ["SLURM_CPUS_PER_TASK"]), pin_memory=True)
@@ -245,20 +240,26 @@ if __name__ == '__main__':
 
    
 
-    # model, net_params, _ = load_model(f'{log_path}/exp{exp_num}', LSTM_ATTN, distribute=True, device=local_rank, to_ddp=True)
+    # model, net_params, _ = load_model(f'{log_path}/exp{exp_num}', LSTM_DUAL, distribute=True, device=local_rank, to_ddp=True)
     
-    # lstm, lstm_params, _ = load_model(f'/data/logs/lstm_attn/exp77', LSTM_ATTN, distribute=True, device=local_rank, to_ddp=True)
 
     conf_model, _, scheduler, scaler = init_train(args, local_rank)
     conf_model.pred_layer = nn.Identity()
+<<<<<<< HEAD
     model = LSTM_DUAL(conf_model, encoder_dims=args.encoder_dim,
                        lstm_args=lstm_params, predict_size=128, num_classes=len(class_labels)*2)
 
     # model = conf_model
+=======
+    model = LSTM_DUAL(conf_model, encoder_dims=args.encoder_dim, lstm_args=lstm_params)
+>>>>>>> master
+
+    model, net_params, _ = load_model(f'{log_path}/exp31', model, distribute=True, device=local_rank, to_ddp=True)
+
+    # model = conf_model
 
 
-
-
+<<<<<<< HEAD
     # state_dict = torch.load(f'{log_path}/exp31/astroconf.pth')
     # new_state_dict = OrderedDict()
     # for key, value in state_dict.items():
@@ -269,20 +270,31 @@ if __name__ == '__main__':
     # state_dict = new_state_dict
     # print("loading state dict...")
     # model.load_state_dict(new_state_dict)
+=======
+>>>>>>> master
 
-    # state_dict = torch.load(f'/data/logs/lstm_attn/exp77/lstm_attn_acc2.pth')
+    # load self supervised weights
+    # state_dict = torch.load(f'/data/logs/simsiam/exp14/simsiam_astroconf.pth')
+    # initialized_layers=[]
     # new_state_dict = OrderedDict()
     # for key, value in state_dict.items():
     #     if key.startswith('module.'):
     #         while key.startswith('module.'):
-    #             key = key[7:]
-    #     new_state_dict[key] = value
+    #             key = key.replace('module.', '')
+    #     if key.startswith('backbone.'):
+    #         print(key)
+    #         new_state_dict[key.replace('backbone.', '')] = value
+    #         initialized_layers.append(key.replace('backbone.', ''))
     # state_dict = new_state_dict
     # print("loading state dict...")
-    # model.load_state_dict(new_state_dict)
+    # missing, unexpected = model.load_state_dict(new_state_dict, strict=False)
+    # print("Missing keys:")
+    # print(missing)
+    # print("Unexpected keys:")
+    # print(unexpected)
 
     model = model.to(local_rank)
-    model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+    model = DDP(model, device_ids=[local_rank])
     print("number of params:", count_params(model))
     
     loss_fn = nn.L1Loss()
@@ -319,7 +331,7 @@ if __name__ == '__main__':
 
     print("Evaluation on test set:")
 
-    preds, targets, confs = trainer.predict(test_dataloader, device=local_rank,
+    preds, targets, confs = trainer.predict(val_dataloader, device=local_rank,
                                              conf=True, load_best=False)
 
     eval_results(preds, targets, confs, labels=class_labels, data_dir=f'{log_path}/exp{exp_num}',
