@@ -5,7 +5,7 @@ Hagai Perets,
 Ilay Kamai,
 
 official implementation of
-> "New Rotation Period measurements for Kepler stars using Deep Learning"
+> "New Rotation Period Measurements for Kepler Stars Using Deep Learning: The 100K Sample"
 
 LightPred is a deep learning model to learn stellar period and inclination
 using self supervised and simulation based learning. 
