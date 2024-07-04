@@ -1,5 +1,4 @@
-# New Rotation Period measurements for Kepler stars using Deep Learning
-
+# LightPred - Deep Learning model for stellar period predicitions
 by
 Hagai Perets,
 Ilay Kamai,
