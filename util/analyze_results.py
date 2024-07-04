@@ -29,9 +29,6 @@ from matplotlib import cm
 
 from mpl_toolkits.mplot3d import Axes3D
 
-mpl.rcParams['axes.linewidth'] = 2
-plt.rcParams.update({'font.size': 18, 'figure.figsize': (10,8), 'lines.linewidth': 2})
-mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=["gray", "r", "c", 'm', 'brown'])
 
 from utils import convert_to_list
 import seaborn as sns
@@ -112,11 +109,15 @@ def median_agg(series):
 
 
 
-def read_raw_table(t_path, columns, start_idx=0, sep='\t'):
+def read_raw_table(t_path, columns, start_idx=0, sep='\t',
+                   col_type='label', clean_lines=True):
     if isinstance(columns, str):
         columns_df = pd.read_csv(columns, sep=sep)
         columns_df = columns_df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
-        columns = columns_df['Label'].values
+        if col_type == 'label':
+            columns = columns_df['Label'].values
+        else:
+            columns = columns_df.columns
     with open(t_path, 'r') as file:
         lines = file.readlines()
     # Parse each row to extract values and errors
@@ -124,9 +125,10 @@ def read_raw_table(t_path, columns, start_idx=0, sep='\t'):
     for i, line in enumerate(lines):
         if i < start_idx:
             continue
-        line = re.sub(r'\s+', ',', line)
-        line = re.sub(r',\*', '*', line)
-        line = re.sub(r',+$', '', line)  # Remove trailing commas
+        if clean_lines:
+            line = re.sub(r'\s+', ',', line)
+            line = re.sub(r',\*', '*', line)
+            line = re.sub(r',+$', '', line)  # Remove trailing commas
         elements = line.rstrip('\n ').split(',')
         row = []
         print(elements)
@@ -194,6 +196,200 @@ def fill_nan_np(x, interpolate=True):
     else:
         x[nan_indices] = 0
     return x
+
+
+def calc_gyro_age_myears_per_row(row, p_att='predicted period'):
+    """
+       from S. Barnes 2003 https://arxiv.org/pdf/0704.3068
+       :param row: a row of the dataframe
+       :return:
+       """
+    p = row[p_att]
+    Teff = row['Teff']
+
+    a = 0.77
+    b = 0.553
+    c = 0.472
+    n = 0.519
+
+    B_V = B_V_from_T(Teff)
+
+    log_t = (1 / n) * (np.log10(p) - np.log10(a) - b * np.log10(B_V - c))
+    return 10 ** (log_t)
+def calc_gyro_age_myears(p, Teff):
+    """
+    from S. Barnes 2003 https://arxiv.org/pdf/0704.3068
+    :param p: rotation period
+    :return:
+    """
+    print(p, Teff)
+    a = 0.77
+    b = 0.553
+    c = 0.472
+    n = 0.519
+    B_V = B_V_from_T(Teff)
+    log_t = (1/n) * (np.log10(p) - np.log10(a) - b*np.log10(B_V - c))
+    return 10**(log_t)
+
+
+def B_V_from_T(T):
+    """
+    from F. J. Ballesteros 2012 https://arxiv.org/pdf/1201.1809
+    :param T: Teff
+    :return: B-V color index
+    """
+    a = 0.8464 * T
+    b = 2.1344 * T - 4600 * 1.84
+    c = 1.054 * T - 4600 * 2.32
+
+    discriminant = b ** 2 - 4 * a * c
+
+    x_positive = (-b + np.sqrt(discriminant)) / (2 * a)
+    return x_positive
+
+def T_from_B_V(B_V):
+    """
+    from F. J. Ballesteros 2012 https://arxiv.org/pdf/1201.1809
+    :param B_V: color index
+    :return: Teff
+    """
+    return 4600*(1/(0.92*B_V+1.7)+1/(0.92*B_V + 0.62))
+
+def compare_ages(df_inference, dfs_compare, names, colors, p_att='Prot', save_dir='../imgs'):
+    df_inference['age_myears'] = df_inference.apply(calc_gyro_age_myears_per_row, axis=1)
+
+
+    for color, name, df in zip(colors, names, dfs_compare):
+        print("calculating ages of ", name)
+        if 'Teff' not in df.columns:
+            df['Teff'] = df_inference[df_inference['KID'].isin(df['KID'])]['Teff']
+        df['age_myears'] = df.apply(lambda row: calc_gyro_age_myears_per_row(row, p_att), axis=1)
+        plt.hist(df['age_myears'], histtype='step',
+                 density=True,
+                 bins=np.linspace(0, 10000, 40),
+                 label=name,
+                 color=color,
+                 linewidth=3
+             )
+        # plt.hist(df['age_myears'],
+        #          histtype='step', density=True, bins=np.linspace(0, 10000, 40), label=name)
+
+    plt.xlabel(r"Age ($10^6$ year)")
+    plt.ylabel("Density")
+    plt.ylim((0, 0.0007))
+    plt.legend()
+    plt.savefig(os.path.join(save_dir, 'age_dist_ref.png'))
+    plt.close()
+
+    for color, name, df in zip(colors, names, dfs_compare):
+        print("calculating ages of ", name)
+        if 'Teff' not in df.columns:
+            df['Teff'] = df_inference[df_inference['KID'].isin(df['KID'])]['Teff']
+        df['age_myears'] = df.apply(lambda row: calc_gyro_age_myears_per_row(row, p_att), axis=1)
+        plt.hist(df['age_myears'],
+                 histtype='step',
+                 density=True,
+                 bins=np.linspace(0, 10000, 40),
+                 label=name,
+                 color=color,
+                 linewidth=3
+                 )
+
+    plt.hist(df_inference['age_myears'], histtype='step',
+             density=True,
+             bins=np.linspace(0, 10000, 40),
+             label='LightPred',
+             color='r',
+             linewidth=3
+             )
+    plt.xlabel(r"Age ($10^6$ year)")
+    plt.ylabel("Density")
+    plt.ylim((0, 0.0007))
+    plt.legend()
+    plt.savefig(os.path.join(save_dir, 'age_dist.png'))
+    plt.show()
+
+
+# def mass_binning(kepler_inference, catalog, m_bins=[0, 0.8, 1.4, 3]):
+#     df = kepler_inference.merge(catalog, on='KID')
+#
+#     fig, ax = plt.subplots()
+#
+#     for i, b in enumerate(m_bins[:-1]):
+#         sub_df = df[(df['Mstar'] >= b) & (df['Mstar'] < m_bins[i + 1])]
+#         sns.kdeplot(sub_df['predicted period'],
+#                     label=fr'${b:.2f}*M_\odot < M < {m_bins[i + 1]:.2f}*M_\odot$ ({len(sub_df)} samples)',
+#                     ax=ax,
+#                     linewidth=2)
+#         print("avg sigma error: ", sub_df['sigma error'].mean())
+#
+#     plt.legend(fontsize='small')
+#     plt.show()
+
+def mass_binning(kepler_inference, catalog, m_bins=[0,1,1.4], save_dir='../imgs'):
+    df = catalog.merge(kepler_inference, on='KID')
+    # m_bins = np.linspace(df['Mstar'].min(), df['Mstar'].max(), n_bins)
+    for i,b in enumerate(m_bins[:-1]):
+        sub_df = df[(df['Mstar'] >= b) & (df['Mstar'] < m_bins[i+1])]
+        plt.hist(sub_df['predicted period'], histtype='step',
+                 density=True,
+                 bins=np.linspace(0,40,40),
+                 label=fr'${b:.2f}*M_\odot < M < {m_bins[i+1]:.2f}*M_\odot$, avg error (Days)'
+                       f'-{sub_df['sigma error'].mean():.2f}',
+                 linewidth=3)
+        print("avg sigma error: ", sub_df['sigma error'].mean())
+    sub_df = df[df['Mstar'] >= m_bins[-1]]
+    plt.hist(sub_df['predicted period'], histtype='step',
+             density=True,
+             bins=np.linspace(0, 40, 40),
+             label=fr'${m_bins[-1]:.2f}*M_\odot < M$, avg error (Days) - {sub_df['sigma error'].mean():.2f} ',
+             linewidth=3)
+    print("avg sigma error: ", sub_df['sigma error'].mean())
+    plt.legend(fontsize='small')
+    plt.xlabel('Predicted Period (Days)')
+    plt.ylabel('Density')
+    plt.savefig(f'{save_dir}/mass_bins.png')
+    plt.show()
+
+def period_mass_bin(kepler_inference, catalog, m=1, save_dir='../imgs'):
+    df = kepler_inference.merge(catalog, on='KID')
+
+    sub_df = df[(df['Mstar'] >= m*0.9) & (df['Mstar'] < m*1.1)]
+    plt.hexbin(sub_df['predicted period'], sub_df['sigma error'], mincnt=1)
+    plt.title(fr'${m*0.9:.2f}*M_\odot < M < {m*1.1:.2f}*M_\odot$ ({len(sub_df)} samples)')
+    print("avg sigma error in bin: ", sub_df['sigma error'].mean())
+    plt.xlabel('Predicted Period (Days)')
+    plt.ylabel('Observational Error (Days)')
+    plt.savefig(f'{save_dir}/p_mass_bin.png')
+    plt.show()
+
+def period_metalicity(kepler_inference, catalog, m_bins=[-1,-0.5,0,0.5], save_dir='../imgs'):
+    df = kepler_inference.merge(catalog, on='KID')
+    plt.hexbin(df['FeH'], df['predicted period'], mincnt=1)
+    plt.xlabel(r'Surface Metalicity $([Fe/H])$')
+    plt.ylabel('predicted period')
+    plt.savefig(f'{save_dir}/metal_p.png')
+    plt.show()
+    for i,b in enumerate(m_bins[:-1]):
+        sub_df = df[(df['FeH'] >= b) & (df['FeH'] < m_bins[i+1])]
+        plt.hist(sub_df['predicted period'], histtype='step',
+                 density=True,
+                 bins=np.linspace(0,40,40),
+                 label=fr'${b:.2f} < [Fe/H] < {m_bins[i+1]:.2f}$, avg error (Days)'
+                       f'-{sub_df['sigma error'].mean():.2f}')
+        print("avg sigma error: ", sub_df['sigma error'].mean())
+    sub_df = df[df['FeH'] >= m_bins[-1]]
+    plt.hist(sub_df['predicted period'], histtype='step',
+             density=True,
+             bins=np.linspace(0, 40, 40),
+             label=fr'${m_bins[-1]:.2f} <= [Fe/H]$, avg error (Days) - {sub_df['sigma error'].mean():.2f} ')
+    print("avg sigma error: ", sub_df['sigma error'].mean())
+    plt.legend(fontsize='small')
+    plt.xlabel('Predicted Period (Days)')
+    plt.ylabel('Density')
+    plt.savefig(f'{save_dir}/metal_bins.png')
+    plt.show()
+
 
 
 def calculate_error_bars(true, predicted, max_val=90):
@@ -274,7 +470,9 @@ def create_kois_mazeh(kepler_inference, mazeh_path='tables/Table_1_Periodic.txt'
     merged_df_kois = kepler_inference.merge(kois, on='KID')
     merged_df_kois.rename(columns=lambda x: x.rstrip('_x'), inplace=True)
 
-    target_cols = ['Teff', 'KID', 'R','logg', 'kepler_name','planet_Prot','eb', 'confidence', 'koi_prad']
+    target_cols = ['Teff', 'KID', 'R','logg',
+                   'kepler_name','planet_Prot','eb',
+                   'confidence', 'koi_prad', 'sigma error']
 
     columns = [col for col in merged_df_kois.columns if 'period' in col or 'inclination' in col] + target_cols
 
@@ -301,6 +499,9 @@ def prepare_df(df, scale=False, filter_giants=True,
 
     # Rename the specified columns
     df.rename(columns=column_mapping, inplace=True)
+    if 'Teff' not in df.columns and 'KID' in df.columns:
+        teff_df = pd.read_csv('tables/berger_catalog.csv')
+        df['Teff'] = teff_df[df['KID'].isin(teff_df['KID']).astype(bool)]['Teff']
     try:
         err_model_p = pd.read_csv('tables/err_df_p.csv')
         err_model_i = pd.read_csv('tables/err_df_i.csv')
@@ -453,8 +654,8 @@ def compare_kois(all_kois, sample, merge_on='kepler_name', save_dir='../imgs'):
     all_kois = all_kois[~all_kois['kepler_name'].isnull()]
     # bad = all_kois[all_kois['KID'] == 11709124]
     # print(bad['kepler_name'], type(bad['kepler_name']))
-    print("plotting lightcurves comparison of ", len(sample), " kois")
-    plot_refrences_lc(all_kois, sample, save_dir=save_dir)
+    # print("plotting lightcurves comparison of ", len(sample), " kois")
+    # plot_refrences_lc(all_kois, sample, save_dir=save_dir)
 
 
     merged_df = all_kois.merge(sample, on=merge_on, suffixes=[' 0', ' 1'])
@@ -467,8 +668,10 @@ def compare_kois(all_kois, sample, merge_on='kepler_name', save_dir='../imgs'):
         # prot_df = prot_df[~prot_df['prot'].isnull()].reset_index()
         prot_df.to_csv('kois_rotation_ref.csv')
         p_err_sample = np.vstack(prot_df['err_prot'].to_numpy()).T
-        p_err_model = np.vstack([prot_df['period model error lower'].values[None],
-                                 prot_df['period model error lower'].values[None]]).T
+        # p_err_model = np.vstack([prot_df['period model error lower'].values[None],
+        #                          prot_df['period model error upper'].values[None]]).T
+        p_err_model = np.vstack([prot_df['sigma error'].values[None] / 2,
+                                 prot_df['sigma error'].values[None] / 2]).T
         plot_kois_comparison(prot_df, 'med predicted period', 'prot',
                              err1=p_err_model, err2=p_err_sample, name='period', save_dir=save_dir)
         plot_kois_comparison2(prot_df, 'med predicted period', 'prot',
@@ -484,6 +687,22 @@ def compare_kois(all_kois, sample, merge_on='kepler_name', save_dir='../imgs'):
                          err1=inc_err_model, err2=inc_err_sample, name='inclination', save_dir=save_dir)
     plot_kois_comparison2(merged_df, 'med predicted inclination', 'i',
                           err1=inc_err_model, err2=inc_err_sample.T, name='inclination', save_dir=save_dir)
+
+
+def compare_non_consistent_samples(dir_path, kepler_inference, ref_df, ref_name):
+    if not os.path.exists(os.path.join(dir_path, 'imgs')):
+        os.mkdir(os.path.join(dir_path, 'imgs'))
+    save_dir = os.path.join(dir_path, 'imgs')
+    for p in os.listdir(dir_path):
+        if p.endswith('.npy'):
+            kid = int(p.removesuffix('.npy'))
+            model_p = kepler_inference[kepler_inference['KID']==kid]['predicted period'].values[0]
+            ref_p = ref_df[ref_df['KID']==kid]['Prot'].values[0]
+            title = fr'{kid}, $P_{{LightPred}}$: {model_p:.2f}, $P_{{{ref_name}}}$: {ref_p:.2f}'
+            print(kid)
+            file_path = os.path.join(dir_path, p)
+            save_path = f'{save_dir}/{kid}.png'
+            show_kepler_sample(file_path, title=title, save_path=save_path, numpy=True, zoom_length=180)
 
 
 def prepare_kois_sample(paths, indicator='kepler_name'):
@@ -763,6 +982,25 @@ def create_hist_factor(true, predicted, bins=90):
     return
     # print('image saved at :', save_path)
 
+def find_non_consistent_samples(kepler_inference, ref, ref_name, thresh_val, save_dir):
+    merged_df = kepler_inference.merge(ref, on='KID', suffixes=['', '_ref'])
+    merged_df['p_diff'] = np.abs(merged_df['predicted period'] - merged_df['Prot_ref'])
+    non_consistent_samples = merged_df[merged_df['p_diff'] > merged_df['Prot_ref']*0.4]
+    group2 = non_consistent_samples[non_consistent_samples['Prot_ref'] < thresh_val]
+    group1 = non_consistent_samples[non_consistent_samples['Prot_ref'] > thresh_val]
+    consistent_samples = merged_df[merged_df['p_diff'] < merged_df['Prot_ref']*0.4]
+    plt.scatter(consistent_samples['Prot_ref'], consistent_samples['predicted period'], label='consistent')
+    plt.scatter(group1['Prot_ref'], group1['predicted period'], label='non consistent group1')
+    plt.scatter(group2['Prot_ref'], group2['predicted period'], label='non consistent group2')
+    plt.legend()
+    plt.xlabel(f'Period {ref_name}')
+    plt.ylabel("Period LightPred")
+    plt.savefig(f'{save_dir}/non_consistent_groups.png')
+    plt.show()
+    group1.to_csv('tables/non_consistent_group1.csv')
+    group2.to_csv('tables/non_consistent_group2.csv')
+
+
 def clusters_inference(kepler_inference, cluster_df, refs,
                        refs_names, ref_markers=['*', '+'], save_dir='../imgs'):
     # Merge dataframes and rename columns
@@ -829,24 +1067,90 @@ def compare_period_distributions(kepler_inference, refs, refs_names, save_name):
     plt.savefig(f'../imgs/{save_name}.png')
     plt.show()
 
-def compare_consistency(model_dir, acf_dir, model_path=None, acf_path=None):
+def McQ_constrains(df):
+    df = df[df['Teff'] < 6500]
+    kois = pd.read_csv('tables/kois.csv')
+    kois_confirmed = kois[kois['koi_disposition'] != 'FALSE POSITIVE']
+    df['koi'] = df['KID'].isin(kois_confirmed['KID']).astype(bool)
+    eb = pd.read_csv('tables/kepler_eb.txt')
+    df['eb'] = df['KID'].isin(eb['KID']).astype(bool)
+    df = df[df['koi']==False]
+    df = df[df['eb']==False]
+    return df
+
+
+def get_sigma_error(model_df):
+    diff_columns = model_df.filter(regex='^diff_\d+_\d+$')
+
+    # Step 2: Define a function to fit a Gaussian and calculate the standard deviation for each row
+    def fit_gaussian_and_get_sigma(row):
+        # Drop NaN values in the row
+        values = row.dropna().values
+        if len(values) > 1:  # Need at least two data points to fit a Gaussian
+            mu, sigma = stats.norm.fit(values)
+            return sigma
+        else:
+            return np.nan  # Return NaN if there are not enough data points
+
+    model_df['sigma error'] = diff_columns.apply(fit_gaussian_and_get_sigma, axis=1)
+    return model_df
+
+def compare_consistency(model_dir, acf_dir, gps_dir, model_path=None, acf_path=None, gps_path=None):
+    if gps_path is None:
+        gps_df = get_consistency_df(gps_dir, target_att='predicted period', valid_thresh=0.7)
+        gps_df.to_csv('tables/kepler_gps_pred.csv', index=False)
+    else:
+        gps_df = pd.read_csv(gps_path)
     if acf_path is None:
         acf_df = get_consistency_df(acf_dir, target_att='predicted acf_p')
+        acf_df.to_csv('tables/kepler_acf_pred.csv', index=False)
     else:
         acf_df = pd.read_csv(acf_path)
     if model_path is None:
+        match = re.search(r'exp(\d+)', model_dir)
+        if match:
+            exp_num = match.group(1)
+        else:
+            exp_num = '?'
+        print("exp num: ", exp_num)
         model_df = get_consistency_df(model_dir, target_att='predicted period', prepare=True, add_conf=True)
+        model_df.to_csv(f'tables/kepler_model_pred_exp{exp_num}.csv', index=False)
     else:
         model_df = pd.read_csv(model_path)
+    acf_df = McQ_constrains(acf_df)
+    model_constrained_df = McQ_constrains(model_df)
 
-    acf_df.to_csv('tables/kepler_acf_pred.csv', index=False)
-    model_df.to_csv('tables/kepler_model_pred_exp45.csv', index=False)
-
-    merged_df = acf_df.merge(model_df, on='KID', suffixes=['_acf', '_model'])
     acf_valid_df = acf_df[acf_df['valid']]
-    print("number of samples acf valid ", len(acf_valid_df))
+    gps_valid_df = gps_df[gps_df['predicted period'] > 0.8]
+    model_df['valid'] = model_df['KID'].isin(acf_valid_df['KID']).astype(bool)
+    model_df_valid = model_df[model_df['valid']]
+    model_df_gps = model_df[model_df['KID'].isin(gps_df['KID']).astype(bool)]
+    model_df_gps_valid = model_df[model_df['KID'].isin(gps_valid_df['KID']).astype(bool)]
+    acf_valid_high_acc = acf_valid_df[acf_valid_df['total_acc'] == 21]
+    acf_valid_high_acc = McQ_constrains(acf_valid_high_acc)
+    print("number of samples acf valid ", len(acf_valid_df), "subsample with high consistency ", len(acf_valid_high_acc))
+    mean_std_model = model_df['sigma error'].mean()
+    mean_std_model_constrained = model_constrained_df['sigma error'].mean()
+    mean_std_model_valid = model_df_valid['sigma error'].mean()
+    mean_std_acf = acf_df['sigma error'].mean()
+    mean_std_acf_valid = acf_valid_df['sigma error'].mean()
+    print("model/model_constrained/model_valid/acf/acf_valid average std error: ",
+          mean_std_model, mean_std_model_constrained, mean_std_model_valid,
+          mean_std_acf, mean_std_acf_valid)
+    mean_std_df = pd.DataFrame({"LightPred": [mean_std_model],
+                                "LightPred McQ14 constrained": [mean_std_model_constrained],
+                                "LightPred acf valid subsample": [mean_std_model_valid],
+                               "ACF McQ14 constrained": [mean_std_acf],
+                                "ACF valid": [mean_std_acf_valid]})
+    mean_std_df.to_csv("tables/mean_std_df.csv", index=False)
+    model_high_acc = model_df[model_df['sigma error'] < 2.2]
+    print("high acc number of samples: ", len(model_high_acc))
     plot_consistency_vs_conf(model_df)
-    plot_consistency_hist(model_df, acf_valid_df)
+    plot_consistency_hist(model_df, acf_df)
+    plot_consistency_hist(model_df_valid, acf_valid_df, suffix='valid')
+    plot_consistency_hist(model_df_gps, gps_df, suffix='gps')
+    plot_consistency_hist(model_df_gps_valid, gps_valid_df, suffix='gps_valid')
+    plot_difference_hist(model_df)
 
     plot_confusion_matrix(model_df, model_name='LightPred', save_name='model_confusion')
     plot_confusion_matrix(acf_valid_df, model_name='ACF', save_name='acf_confusion')
@@ -854,7 +1158,7 @@ def compare_consistency(model_dir, acf_dir, model_path=None, acf_path=None):
     plot_confusion_matrix(model_df[model_df['period confidence'] > 0.95], model_name='LightPred', save_name='model_confusion_95')
 
 
-def get_consistency_df(dfs_dir, target_att, prepare=False, thresh=6, add_conf=False):
+def get_consistency_df(dfs_dir, target_att, prepare=False, thresh=6, add_conf=False, valid_thresh=0):
     for i, file in enumerate(os.listdir(dfs_dir)):
         if file.endswith('csv'):
             lag = file.strip('.csv').split('_')[-1]
@@ -863,7 +1167,7 @@ def get_consistency_df(dfs_dir, target_att, prepare=False, thresh=6, add_conf=Fa
                                 teff_thresh=True, filter_non_ps=True)
             else:
                 df = pd.read_csv(f'{dfs_dir}/{file}')
-            df['valid'] = df[target_att] >= 0
+            df['valid'] = df[target_att] >= valid_thresh
             if i == 0:
                 tot_df = df
             else:
@@ -873,23 +1177,28 @@ def get_consistency_df(dfs_dir, target_att, prepare=False, thresh=6, add_conf=Fa
                 tot_df['valid'] = tot_df['valid'] & tot_df[f'valid_{lag}']
                 lag_acc10 = np.zeros(len(tot_df))
                 lag_acc20 = np.zeros(len(tot_df))
+                lag_acc30 = np.zeros(len(tot_df))
                 lag_acc = np.zeros(len(tot_df))
                 for j in range(i):
                     first_att = target_att if not j else f'{target_att}_{j}'
-                    j_lag_diff = np.abs(tot_df[first_att] - tot_df[f'{target_att}_{lag}'])
+                    j_lag_diff = tot_df[first_att] - tot_df[f'{target_att}_{lag}']
                     j_lag_acc10 = np.abs(tot_df[f'{target_att}_{lag}'] * 0.1) > j_lag_diff
                     lag_acc10 += j_lag_acc10
                     j_lag_acc20 = np.abs(tot_df[f'{target_att}_{lag}'] * 0.2) > j_lag_diff
                     lag_acc20 += j_lag_acc20
+                    j_lag_acc30 = np.abs(tot_df[f'{target_att}_{lag}'] * 0.3) > j_lag_diff
+                    lag_acc30 += j_lag_acc30
                     j_lag_acc = j_lag_diff < thresh
                     lag_acc += j_lag_acc
                     tot_df[f'diff_{j}_{lag}'] = j_lag_diff
                 tot_df[f'acc10_{lag}'] = lag_acc10
                 tot_df[f'acc20_{lag}'] = lag_acc20
+                tot_df[f'acc30_{lag}'] = lag_acc30
                 tot_df[f'acc_{lag}'] = lag_acc
                 # acf_df.rename(columns=lambda x: x.rstrip('_0'), inplace=True)
     tot_df['total_acc10'] = tot_df.apply(lambda x: np.sum([x[k] for k in x.keys() if 'acc10' in k]), axis=1)
     tot_df['total_acc20'] = tot_df.apply(lambda x: np.sum([x[k] for k in x.keys() if 'acc20' in k]), axis=1)
+    tot_df['total_acc30'] = tot_df.apply(lambda x: np.sum([x[k] for k in x.keys() if 'acc30' in k]), axis=1)
     tot_df['total_acc'] = tot_df.apply(lambda x: np.sum([x[k] for k in x.keys() if 'acc_' in k]), axis=1)
     tot_df['max_diff'] = tot_df.apply(lambda x: max([x[k] for k in x.keys() if 'diff' in k]), axis=1)
     tot_df['mean_diff'] = tot_df.apply(lambda x: np.mean([x[k] for k in x.keys() if 'diff' in k]), axis=1)
@@ -898,28 +1207,149 @@ def get_consistency_df(dfs_dir, target_att, prepare=False, thresh=6, add_conf=Fa
         tot_df['mean_period_confidence'] = (tot_df.apply
                                             (lambda x: max([x[k] for k in x.keys() if
                                                             'confidence' in k]), axis=1))
+    tot_df = get_sigma_error(tot_df)
     return tot_df
 
-def plot_kepler_inference(kepler_inference, save_dir):
-    # kepler_inference = kepler_inference[kepler_inference['mean_period_confidence'] > 0.95]
-    sample_kois = prepare_kois_sample(['tables/albrecht2022_clean.csv', 'tables/morgan2023.csv', 'tables/win2017.csv'])
+def compare_kois_eb_hj(kepler_inference):
+    kois = pd.read_csv('tables/kois.csv')
+    kois = kois[kois['koi_disposition'] != 'FALSE POSITIVE']
+    inference_kois = kepler_inference.merge(kois, on='KID')
+    inference_hj = inference_kois[(inference_kois['koi_prad'] > J_radius_factor)
+                                  & (inference_kois['planet_Prot'] < prot_hj)]
+    eb = pd.read_csv('tables/kepler_eb.txt')
+    inference_eb = kepler_inference.merge(eb, on='KID')
+
+    hist(kepler_inference, df_other=inference_kois, other_name='kois',
+         save_name='p_kois', att='predicted period')
+    hist(kepler_inference, df_other=inference_hj, other_name='HJ',
+         save_name='p_hj', att='predicted period')
+    hist(kepler_inference, df_other=inference_eb, other_name='Eclipsing Binaries',
+         save_name='p_eb', att='predicted period')
+
+    fig, ax = plt.subplots(2,1)
+    ax[0].scatter(inference_eb['period'],
+                inference_eb['predicted period'])
+    ax[1].scatter(inference_eb['period'],
+                inference_eb['predicted period'])
+    ax[1].set_ylim(0,15)
+    ax[1].set_xlim(0,15)
+    ax[0].set_xlim(0, 100)
+    ax[1].set_xlabel("Orbital Period (Days)")
+    plt.tight_layout(rect=[0.1, 0, 1, 1])
+    fig.text(0.04, 0.5, 'Predicted Stellar Period (Days)', va='center', rotation='vertical')
+
+    plt.savefig('../imgs/p_eb_scatter_all.png')
+    plt.show()
+
+    plt.scatter(inference_eb[inference_eb['Teff_x'] < 6200]['period'],
+                inference_eb[inference_eb['Teff_x'] < 6200]['predicted period'],
+                label=r'$Teff < 6200 K$')
+    plt.scatter(inference_eb[inference_eb['Teff_x'] > 6200]['period'],
+                inference_eb[inference_eb['Teff_x'] > 6200]['predicted period'],
+                label=r'$Teff > 6200 K$', alpha=0.5)
+    plt.xlim(0, 100)
+    plt.xlabel("orbital period")
+    plt.ylabel("stellar period")
+    plt.legend()
+    # plt.colorbar(label='period confidence')
+    plt.savefig('../imgs/p_eb_scatter.png')
+    plt.show()
+
+    plt.scatter(inference_hj[inference_hj['Teff_x'] < 6200]['planet_Prot'],
+                inference_hj[inference_hj['Teff_x'] < 6200]['predicted period'], label=r'$Teff>6200 K$')
+    plt.scatter(inference_hj[inference_hj['Teff_x'] > 6200]['planet_Prot'],
+                inference_hj[inference_hj['Teff_x'] > 6200]['predicted period'], label=r'$Teff<6200 K$')
+    plt.xlabel("HJ period")
+    plt.ylabel("stellar period")
+    plt.legend()
+    plt.savefig('../imgs/p_hj_scatter.png')
+    plt.show()
+    return inference_kois, inference_hj, inference_eb
+
+def plot_kepler_inference(kepler_inference, low_p_acf, save_dir):
+
     ref1 = pd.read_csv('tables/Table_1_Periodic.txt')
     compare_period(kepler_inference, ref1, ref_name='McQ14', save_dir=save_dir)
+    find_non_consistent_samples(kepler_inference, ref1, ref_name='McQ14', thresh_val=4, save_dir=save_dir)
+    high_conf_inference = kepler_inference[(kepler_inference['period confidence'] > 0.95) &
+                                           (kepler_inference['sigma error'] < 1.5)]
+    hist(kepler_inference, df_other=high_conf_inference,
+         other_name='high conf', save_name='high_conf')
+
+    # compare_non_consistent_samples(r'..\non_consistent_group1',
+    #                                kepler_inference, ref1, 'McQ14')
+    # compare_non_consistent_samples(r'..\non_consistent_group2',
+    #                                kepler_inference, ref1, 'McQ14')
     ref2 = pd.read_csv('tables/reinhold2023.csv')
     compare_period(kepler_inference, ref2, ref_name='Reinhold23', save_dir=save_dir)
+    ref3 = pd.read_csv('tables/santos21.csv')
+    compare_period(kepler_inference, ref3, ref_name='Santos21', save_dir=save_dir)
+    inference_kois, inference_hj, inference_eb = compare_kois_eb_hj(kepler_inference)
+
+    sample_kois = prepare_kois_sample(['tables/albrecht2022_clean.csv',
+                                       'tables/morgan2023.csv', 'tables/win2017.csv'])
+    compare_kois(inference_kois, sample_kois, save_dir=save_dir)
+    if low_p_acf:
+        acf_inference = pd.read_csv('tables/kepler_acF_pred.csv')
+        kepler_inference = set_low_p(kepler_inference,
+                                     acf_inference, threshold=2,
+                                     other_att='predicted acf_p',
+                                     ref_name='ACF')
+    berger_cat = pd.read_csv('tables/berger_catalog.csv')
+    hist_binned_by_att(kepler_inference, att='predicted period',
+                       bins=[3500, 5200, 6000, 7000, 7600], bin_att='Teff',
+                       save_name='p_binned_Teff', save_dir=save_dir)
+    mass_binning(kepler_inference, berger_cat)
+    period_mass_bin(kepler_inference, berger_cat)
+    period_metalicity(kepler_inference, berger_cat)
     clusters_df = pd.read_csv('tables/meibom2011.csv')
     clusters_inference(kepler_inference, clusters_df, refs=[ref1, ref2],
-                       refs_names=['Mazeh', 'Reinholds'], save_dir=save_dir)
-    berger_cat = pd.read_csv('tables/berger_catalog.csv')
-    merged_df_mazeh, merged_df_kois = create_kois_mazeh(kepler_inference, kois_path='tables/kois.csv')
+                       refs_names=['McQ14', 'Reinhold23'], save_dir=save_dir)
+    compare_ages(kepler_inference, [ref1, ref2, ref3],
+                 names=['McQ14', 'Reinhold23', 'Santos21'], colors=['gray', 'c', 'm'], p_att='Prot')
     Teff_analysis(kepler_inference, berger_cat, refs=[ref1, ref2],
-                 refs_names=['McQ14', 'Reinholds23'], save_dir=save_dir)
-    compare_kois(merged_df_kois, sample_kois, save_dir=save_dir)
+                 refs_names=['McQ14', 'Reinholds23'], save_dir=save_dir, log_y=True)
+
+
 
 def aggregate_results(df, target_att='predicted period'):
     selected_columns = df.filter(regex=target_att).columns
     df[target_att] = df[selected_columns].mean(axis=1)
     return df
+
+def set_low_p(kepler_inference, other_df, other_att='Prot', threshold=4, ref_name='McQ14'):
+    filtered_other = other_df[(other_df[other_att] < threshold) & (other_df[other_att] > 0)
+                              & (other_df['KID'].isin(kepler_inference['KID']))]
+    print("number of low p acf points :", len(filtered_other))
+    update_dict = filtered_other.set_index('KID')[other_att].to_dict()
+    mask = kepler_inference['KID'].isin(update_dict.keys())
+    kepler_inference.loc[mask, 'predicted period'] = kepler_inference['KID'].map(update_dict)
+    if 'sigma error' in other_df.columns:
+        sigma_dict = filtered_other.set_index('KID')['sigma error'].to_dict()
+        kepler_inference.loc[mask, 'sigma error'] = kepler_inference['KID'].map(sigma_dict)
+    kepler_inference.loc[mask, 'method'] = ref_name
+    return kepler_inference
+
+
+def create_final_predictions(df_path, low_p_acf=False):
+    kepler_inference = aggregate_results(pd.read_csv(df_path))
+    kepler_inference['method'] = 'LightPred'
+    plot_kepler_inference(kepler_inference, low_p_acf=low_p_acf, save_dir='../imgs')
+    kepler_inference = kepler_inference.round(decimals=3).sort_values(by='KID')
+    kepler_inference.rename(columns={'sigma error':'observational error',
+                             'period model error lower': "simulation error lower",
+                             'period model error upper': "simulation error"}, inplace=True)
+    simulation_vs_observational_error(kepler_inference)
+    kepler_inference_clean = kepler_inference[['KID', 'Teff', 'R', 'logg',
+                                               'predicted period', 'observational error',
+                                               'simulation error', 'period confidence',
+                                               'method']]
+    kepler_inference_clean.loc[kepler_inference_clean['method']=='ACF', ['period confidence',
+                                                                         'simulation error']] = np.nan
+    kepler_inference_clean.to_csv("tables/kepler_predictions_clean.csv", index=False)
+    print("number of all samples: ", len(kepler_inference_clean))
+    print("number of ACF predictions: ", len(kepler_inference_clean[kepler_inference_clean['method']=='ACF']))
+
 def gold_silver_metal_inference(df_path, num_segments=7):
     if not os.path.exists('../imgs/gold'):
         os.mkdir('../imgs/gold')
@@ -1065,11 +1495,11 @@ def real_inference():
     # inc_t_kois(kepler_inference_56, merged_df_kois)
 
 
-def aggregate_dfs_from_gpus(folder_name, file_name='kepler_inference_full_detrend'):
+def aggregate_dfs_from_gpus(folder_name, num_qs=7, num_ranks=4, file_name='kepler_inference_full'):
     if not os.path.exists(f'../inference/{folder_name}'):
         os.mkdir(f'../inference/{folder_name}')
-    for q in range(7):
-        for rank in range(4):
+    for q in range(num_qs):
+        for rank in range(num_ranks):
             if not rank:
                 df = pd.read_csv(f'../inference/{folder_name}_ranks/'
                                  f'{file_name}_{q}_rank_{rank}.csv')
@@ -1096,20 +1526,26 @@ def prad_plot(merged_df_kois, window_size, dir='../imgs'):
     plt.savefig(os.path.join(dir, 'prad_inc.png'))
     plt.show()
 
-def mock_inference():
-    mock_eval = prepare_df(pd.read_csv('../mock_eval/eval_astroconf_exp47.csv'),
+def mock_inference(name, prepare=False):
+    mock_eval = pd.read_csv(f'../mock_eval/eval_astroconf_{name}.csv')
+    columns_to_lower = [col for col in mock_eval.columns
+                        if col.startswith('predicted') or col.endswith('confidence')]
+    column_mapping = {col: col.lower() for col in columns_to_lower}
+    mock_eval.rename(columns=column_mapping, inplace=True)
+    if prepare:
+        mock_eval = prepare_df(mock_eval,
                filter_giants=False, filter_eb=False, teff_thresh=False)
     scatter_predictions(mock_eval['Period'], mock_eval['predicted period'], mock_eval['period confidence'],
-                        name='period_exp47_clean', units='Days', show_acc=False )
+                        name=f'period_{name}_clean', units='Days', show_acc=False )
     scatter_predictions(mock_eval['Inclination'], mock_eval['predicted inclination'],
                         mock_eval['inclination confidence'],
-                        name='inc_exp47_clean', units='Deg', show_acc=False)
+                        name=f'inc_{name}_clean', units='Deg', show_acc=False)
 
     scatter_predictions(mock_eval['Period'], mock_eval['predicted period'], mock_eval['period confidence'],
-                        name='period_exp47', units='Days')
+                        name=f'period_{name}', units='Days')
     scatter_predictions(mock_eval['Inclination'], mock_eval['predicted inclination'],
                         mock_eval['inclination confidence'],
-                        name='inc_exp47', units='Deg')
+                        name=f'inc_{name}', units='Deg')
 
     fig,axes = plt.subplots(1,2, figsize=(10,5))
     axes[1].hist(mock_eval['Period'], histtype='step', bins=40, density=True, label='True')
@@ -1126,23 +1562,46 @@ def mock_inference():
     axes[0].set_ylabel('Density')
     plt.tight_layout()
     # plt.legend()
-    plt.savefig('../mock_imgs/mock_inference_hist_i_p.png')
+    plt.savefig(f'../mock_imgs/mock_inference_hist_i_p_{name}.png')
     plt.close()
 
     mock_eval['diff'] = np.abs(mock_eval['predicted period'] - mock_eval['Period'])
-    plt.hexbin(mock_eval['period confidence'], mock_eval['diff'], mincnt=1, cmap='viridis')
-    plt.xlabel("confidence")
-    plt.ylabel(r"$|P_{True} - P_{Predicted}|$ (Days)")
+    plt.hexbin(mock_eval['period confidence'], mock_eval['diff'], gridsize=100, mincnt=1, cmap='viridis')
+    plt.xlabel("Confidence")
+    plt.ylabel(r"Absolute Error (Days)")
     plt.colorbar(label='Counts')
-    plt.savefig('../mock_imgs/p_vs_conf.png')
+    plt.savefig(f'../mock_imgs/p_vs_conf_{name}.png')
     plt.show()
 
     mock_eval['inc_diff'] = np.abs(mock_eval['predicted inclination'] - mock_eval['Inclination'])
-    plt.hexbin(mock_eval['inclination confidence'], mock_eval['diff'], mincnt=1, cmap='viridis')
+    plt.hexbin(mock_eval['inclination confidence'], mock_eval['diff'],gridsize=100, mincnt=1, cmap='viridis')
     plt.xlabel("confidence")
     plt.ylabel(r"$|i_{True} - i_{Predicted}|$ (Deg)")
     plt.colorbar(label='Counts')
-    plt.savefig('../mock_imgs/i_vs_conf.png')
+    plt.savefig(f'../mock_imgs/i_vs_conf_{name}.png')
+    plt.show()
+
+def gps_test(df_path):
+    import statsmodels.api as sm
+    df = pd.read_csv(f'../inference/{df_path}')
+    df_gps = df[df['method'] == 'gps']
+    df_acf = df[df['method'] == 'acf']
+    model_acf = sm.OLS(df_acf['period'], df_acf['predicted period']).fit()
+    slope_acf = model_acf.params[0]
+    plt.scatter(df_acf['period'], df_acf['predicted period'])
+    plt.plot(df_acf['predicted period'], df_acf['predicted period'] * slope_acf)
+    acc10_acf = np.array(np.abs(df_acf['period'] - df_acf['predicted period']) < df_acf['period'] * 0.1).astype(
+        np.int8)
+    acc10p_acf = acc10_acf.sum() / len(acc10_acf)
+    plt.title(f"acc10p {acc10p_acf}, slope = {slope_acf}")
+    plt.show()
+
+    df_gps_valid = df_gps[(df_gps['predicted period'] > 1) & (df_gps['predicted period'] < 11)]
+    model = sm.OLS(df_gps_valid['period'], df_gps_valid['predicted period']).fit()
+    slope = model.params[0]
+    plt.scatter(df_gps_valid['predicted period'], df_gps_valid['period'])
+    plt.plot(df_gps_valid['predicted period'], df_gps_valid['predicted period'] * slope)
+    plt.title(f"slope - {1/slope}")
     plt.show()
 
 def aigrian_test():
@@ -1151,36 +1610,70 @@ def aigrian_test():
                                   filter_giants=False, filter_eb=False, teff_thresh=False)
     acf_on_aigrain = pd.read_csv('../inference/aigrain_data/acf_results_data_aigrain2_clean.csv')
     gps_on_aigrain = pd.read_csv('../inference/aigrain_data/gps_results_data_aigrain2_dual.csv')
+    gps_subdf = gps_on_aigrain[gps_on_aigrain['predicted period'] < gps_on_aigrain['predicted period'].max()]
+    acf_subdf = acf_on_aigrain[acf_on_aigrain['predicted period'] > 0]
+    model_sub_acf = model_on_aigrain[acf_on_aigrain['predicted period'] > 0]
+    model_sub_gps = model_on_aigrain[gps_on_aigrain['predicted period'] < gps_on_aigrain['predicted period'].max()]
 
     scatter_predictions(model_on_aigrain['Period'], model_on_aigrain['predicted period'],
                         model_on_aigrain['period confidence'],
-                        name='period', units='Days', show_acc=False )
-    # scatter_predictions(acf_on_aigrain['Period'], acf_on_aigrain['predicted period'],
-    #                     acf_on_aigrain['period confidence'],
-    #                     name='period_acf_aigrain', units='Days', )
-    # scatter_predictions(gps_on_aigrain['Period'], gps_on_aigrain['predicted period'],
-    #                     gps_on_aigrain['period confidence'],
-    #                     name='period_acf_aigrain', units='Days', )
+                        name='period', units='Days', title='LightPred', show_acc=False )
+    scatter_predictions(acf_on_aigrain['period'], acf_on_aigrain['predicted period'],
+                        conf=None, title='ACF', show_acc=False,
+                        name='period_acf_aigrain', units='Days', )
+    scatter_predictions(gps_on_aigrain['period'], gps_on_aigrain['predicted period'],
+                        conf=None, title='GPS', show_acc=False,
+                        name='period_gps_aigrain', units='Days', )
+    scatter_predictions(acf_subdf['period'], acf_subdf['predicted period'],
+                        conf=None, title='ACF', show_acc=False,
+                        name='period_acf_aigrain_subset', units='Days', )
+    scatter_predictions(gps_subdf['period'], gps_subdf['predicted period'],
+                        conf=None, title='GPS', show_acc=False,
+                        name='period_gps_aigrain_subset', units='Days', )
+    scatter_predictions(model_sub_acf['Period'], model_sub_acf['predicted period'],
+                        model_sub_acf['period confidence'],
+                        name='period_sub_acf', units='Days', title='LightPred', show_acc=False )
+    scatter_predictions(model_sub_gps['Period'], model_sub_gps['predicted period'],
+                        model_sub_gps['period confidence'],
+                        name='period_sub_acf', units='Days', title='LightPred', show_acc=False)
     model_acc, model_acc20, model_error, acf_acc, acf_acc20, acf_error = compare_period_on_mock(model_on_aigrain, acf_on_aigrain)
     print("resuls acf - ", acf_acc, acf_acc20, acf_error)
     model_acc, model_acc20, model_error, gps_acc, gps_acc20, gps_error = compare_period_on_mock(model_on_aigrain, gps_on_aigrain,
                                                                         ref_name='gps')
+    (model_acf_acc, model_acf_acc20, model_acf_error, subset_acf_acc, subset_acf_acc20,
+     subset_acf_error) = compare_period_on_mock(model_sub_acf, acf_subdf)
+    (model_gps_acc, model_gps_acc20, model_gps_error, subset_gps_acc, subset_gps_acc20,
+     subset_gps_error) = compare_period_on_mock(model_sub_gps, gps_subdf)
+    print("resuls acf - ", acf_acc, acf_acc20, acf_error)
     print("results gps - ", gps_acc, gps_acc20, gps_error)
+    print("resuls acf subset - ", subset_acf_acc, subset_acf_acc20, subset_acf_error)
+    print("results gps subset - ", subset_gps_acc, subset_gps_acc20, subset_gps_error)
     print("results model - ", model_acc, model_acc20, model_error)
-    res_df = pd.DataFrame({"acc10":[model_acc], "acc20":[model_acc20],
-                           "acf_acc10":[acf_acc], "acf_acc20":[acf_acc20],
-                           "gps_acc10":[gps_acc], "gps_acc20":[gps_acc20],})
-    res_df.to_csv("../mock_imgs/aigrain_test.csv")
+    print("results model acf subset - ", model_acf_acc, model_acf_acc20, model_acf_error)
+    print("results model gps subset - ", model_gps_acc, model_gps_acc20, model_gps_error)
+    print("fraction of points acf subset: ", len(acf_subdf)/ len(acf_on_aigrain))
+    print("fraction of points gps subset: ", len(gps_subdf)/ len(gps_on_aigrain))
+    # res_df = pd.DataFrame({"acc10":[model_acc], "acc20":[model_acc20],
+    #                        "acf_acc10":[acf_acc], "acf_acc20":[acf_acc20],
+    #                        "gps_acc10":[gps_acc], "gps_acc20":[gps_acc20],})
+    #
+
+def add_teff(df_dir, teff_dir):
+    regex = 'q_(\d)*'
+    for p in os.listdir(df_dir):
+        match = re.search(regex, p)
+        if match:
+            q = match.group(1)
+        df = pd.read_csv(os.path.join(df_dir, p))
+        for t in os.listdir(teff_dir):
+            q_t = t.removesuffix('.csv').split('_')[-1]
+            if q_t == q:
+                df_t = pd.read_csv(os.path.join(teff_dir, t))
+                df['Teff'] = df_t.merge(df, on='KID')['Teff']
+                df.to_csv(os.path.join(df_dir, p), index=False)
 
 
 if __name__ == "__main__":
-    # aigrian_test()
-    # mock_inference()
-    # aggregate_dfs_from_gpus('astroconf_cls_exp7_ssl_finetuned')
-    # aggregate_dfs_from_gpus('acf_exp7', file_name='acf_kepler_q')
-    compare_consistency('../inference/astroconf_exp45_ssl', '../inference/acf_exp7',
-                        acf_path='tables/kepler_acf_pred.csv', model_path='tables/kepler_model_pred_exp45.csv')
-    # gold_silver_metal_inference('tables/kepler_model_pred_exp45.csv', num_segments=7)
-    # real_inference()
+    create_final_predictions('tables/kepler_model_pred_exp45.csv', low_p_acf=True)
 
 

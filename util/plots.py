@@ -6,17 +6,21 @@ import matplotlib as mpl
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.colors import Normalize
 from scipy.signal import savgol_filter as savgol
+from scipy.stats import norm
 from matplotlib.patches import ConnectionPatch
 from matplotlib.ticker import FuncFormatter
 from matplotlib.lines import Line2D
+from scipy.stats import ks_2samp
+
 
 import os
 import pandas as pd
 from utils import read_fits
 
-mpl.rcParams['axes.linewidth'] = 2
-plt.rcParams.update({'font.size': 18, 'figure.figsize': (10,8), 'lines.linewidth': 2})
+mpl.rcParams['axes.linewidth'] = 4
+plt.rcParams.update({'font.size': 22, 'figure.figsize': (14,10), 'lines.linewidth': 4})
 mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=["gray", "r", "c", 'm', 'brown'])
+plt.rcParams.update({'xtick.labelsize': 22, 'ytick.labelsize': 22})
 
 def nice_ticks(data_length, num_ticks=4, start=10000):
     ticks = np.linspace(start, data_length, num_ticks )
@@ -37,7 +41,7 @@ def scientific_notation_formatter(val, pos):
     return r"$10^{{{:.0f}}}$".format(exponent)
 
 def scatter_predictions(true, predicted, conf, name, units,
-                        errs=None, show_acc=True, dir='../mock_imgs'):
+                        errs=None, show_acc=True, title='', dir='../mock_imgs'):
     """
     scatter plot of predictions with ground truth
     :param true: true predictions
@@ -49,9 +53,12 @@ def scatter_predictions(true, predicted, conf, name, units,
     :param dir: directory to save
     :return:
     """
-    fig, ax = plt.subplots(figsize=(10,8))
-    im = ax.scatter(true, predicted, alpha=0.4,
-                c=conf, cmap='viridis', s=5)
+    fig, ax = plt.subplots()
+    if conf is not None:
+        im = ax.scatter(true, predicted, alpha=0.4,
+                    c=conf, cmap='viridis', s=5)
+    else:
+        im = ax.scatter(true, predicted, alpha=0.8,)
     if errs is not None:
         errs, mean = errs
         plt.errorbar(np.arange((errs.shape[1])), mean, fmt='none', yerr=errs)
@@ -65,23 +72,26 @@ def scatter_predictions(true, predicted, conf, name, units,
                    f' \nmean_err({units}): {mean_error:.2f} \nmean_err_p: {mean_error_p:.2f}'
         x, y = 0.15, 0.85  # These values represent the top-right corner (0.95, 0.95)
         bbox_props = dict(boxstyle='round', facecolor='white', edgecolor='black', pad=0.5)
-        ax.annotate(acc_text, (x, y), fontsize=14, color='black', xycoords='figure fraction',
+        ax.annotate(acc_text, (x, y), color='black', xycoords='figure fraction',
                      bbox=bbox_props, ha='left', va='top')
-    cbar = fig.colorbar(im)
-    cbar.ax.set_xlabel('confidence', fontdict={'fontsize': 14})
-    cbar.ax.tick_params(labelsize=14)
-    plt.xlabel(f'True ({units})', fontdict={'fontsize': 18})
-    plt.ylabel(f'Predicted ({units})', fontdict={'fontsize': 18})
-    ax.tick_params(axis='both', which='both', labelsize=12, width=2, length=6, direction='out', pad=5)
+    if conf is not None:
+        cbar = fig.colorbar(im)
+        cbar.set_label('Confidence', labelpad=20)
+        cbar.ax.tick_params(labelsize=20)
+    plt.xlabel(f'True ({units})')
+    plt.ylabel(f'Predicted ({units})')
+    plt.title(title)
+    ax.tick_params(axis='both', which='both', pad=5)
 
     plt.savefig(f'{dir}/{name}_scatter.png')
     plt.show()
 
-def hist(kepler_inference, save_name, att='predicted inclination', label="", x_label=None,
-         df_mazeh=None, df_other=None, other_name='kois', theoretical='', weights=None, dir='../imgs'):
+def hist(kepler_inference, save_name, att='predicted period', label="", x_label=None,
+         df_mazeh=None, df_other=None, other_att=None, other_name='kois', theoretical='', weights=None, dir='../imgs'):
     """
     inclination histogram
     """
+    other_att = other_att or att
     label = label + f' ({len(kepler_inference)} points)'
     if df_other is not None:
         other_name = other_name + f' ({len(df_other)} points)'
@@ -95,7 +105,10 @@ def hist(kepler_inference, save_name, att='predicted inclination', label="", x_l
     if df_mazeh is not None:
         plt.hist(df_mazeh[f'{att}'], bins=40, histtype='step', label='Mazeh data', density=True)
     if df_other is not None:
-        plt.hist(df_other[f'{att}'], bins=20, histtype='step', label=other_name, density=True)
+        plt.hist(df_other[f'{other_att}'], bins=20, histtype='step', label=other_name, density=True)
+        ks_test_res, ks_test_p = ks_2samp(kepler_inference[f'{att}'],
+                                   df_other[f'{other_att}'], method='exact')
+        print(f"ks test for {save_name}: ", ks_test_res, ks_test_p)
     if theoretical == 'cos':
         incl = np.rad2deg(np.arccos(np.random.uniform(0,1, len(kepler_inference))))
         plt.hist(incl, bins=40, histtype='step', label='uniform in cos(i)', density=True)
@@ -149,21 +162,32 @@ def threshold_hist(df, thresh_att, thresh, save_name,
     plt.close()
 
 
+def hist_binned_by_att(df, att, bins, bin_att, save_name, save_dir='../imgs'):
+    for i, b in enumerate(bins[:-1]):
+        df_reduced = df[(df[bin_att] < bins[i+1]) & (df[bin_att] > b)]
+        num_points = len(df_reduced)
+        if num_points > 10:
+            plt.hist(df_reduced[att], histtype='step',
+                     bins=40, density=True, label=rf'${b} < {bin_att} < {bins[i+1]}$')
+    plt.legend()
+    plt.savefig(f'{save_dir}/{save_name}.png')
+    plt.show()
+
+
 
 def compare_period(df_inference, df_compare, p_att='Prot', ref_name='Reinhold2023', save_dir="../imgs"):
     merged_df = df_compare.merge(df_inference, on='KID')
     merged_df.rename(columns=lambda x: x.rstrip('_x'), inplace=True)
     merged_df = merged_df[merged_df.columns.drop(list(merged_df.filter(regex='_y$')))]
+
     # merged_df = merged_df[merged_df['Prot'] > 3]
     pred, label = merged_df['predicted period'].values, merged_df[p_att].values
-    conf = merged_df['period confidence']
+    merged_df['period confidence'] = np.round(merged_df['period confidence'], decimals=2)
     acc10 = np.sum(np.abs(pred - label) <= label * 0.1) / len(merged_df)
-    print(f"{ref_name} accuracy 10%: {acc10}")
+    acc20 = np.sum(np.abs(pred - label) <= label * 0.2) / len(merged_df)
+    print(f"{ref_name} accuracy 10%/20%: {acc10}, {acc20}")
 
-    # g = sns.JointGrid(data=merged_df, x=f'{p_att}', y='predicted period', space=0)
-    g = sns.JointGrid(data=merged_df, x=f'{p_att}', y='predicted period', space=0,
-                      height=10)
-
+    g = sns.JointGrid(data=merged_df, x=f'{p_att}', y='predicted period', space=0, height=14)
 
     # Add density plots
     g.plot_marginals(sns.histplot, kde=False)
@@ -188,22 +212,27 @@ def compare_period(df_inference, df_compare, p_att='Prot', ref_name='Reinhold202
     # Add labels
     g.set_axis_labels(f'{ref_name} Period (Days)', f'LightPred Period (Days)', fontsize=12)
 
-
     # Add color bar
     norm = plt.Normalize(merged_df['period confidence'].min(), merged_df['period confidence'].max())
     sm = plt.cm.ScalarMappable(cmap="viridis", norm=norm)
-    sm.set_array([0.9])
+    sm.set_array([0.8])
 
     # Adjust color bar position to avoid overlapping with marginal plots
     cbar_ax = g.fig.add_axes([.91, .25, .02, .5])  # [left, bottom, width, height]
     cbar = g.fig.colorbar(sm, cax=cbar_ax)
-    cbar.set_label('Period Confidence')
+    cbar.set_label('Confidence')
+
+    # Set color bar tick labels to rounded values
+    cbar.set_ticks(np.arange(0.8, 1.0, 0.05))
+    cbar.set_ticklabels([f'{x:.2f}' for x in np.arange(0.8, 1.0, 0.05)])
 
     # Adjust the layout to make room for the color bar
     g.fig.subplots_adjust(right=0.9)
 
-    plt.savefig(f"{save_dir}/compare_{ref_name}")
+    plt.savefig(f"{save_dir}/compare_{ref_name}.png")
     plt.show()
+
+
 
 def plot_kois_comparison(df, att1, att2, err1, err2, name, save_dir='../imgs'):
     """
@@ -316,7 +345,7 @@ def plot_refrences_lc(kepler_inference, refs, samples_dir='samples/refs', save_d
             elif p.endswith('.npy'):
                 show_kepler_sample(os.path.join(samples_dir, p), title, save_path)
 
-def show_kepler_sample(file_path, title, save_path, numpy=True):
+def show_kepler_sample(file_path, title, save_path, numpy=True, zoom_length=90):
     if numpy:
         x = np.load(file_path)
         time = np.linspace(0, int(len(x) / 48), len(x))
@@ -327,12 +356,12 @@ def show_kepler_sample(file_path, title, save_path, numpy=True):
     x_avg = savgol(x, 49, 1, mode='mirror', axis=0)
 
     fig, ax = plt.subplots(1, 2, figsize=(12, 8))
-    ax[0].plot(time, x, label='raw', alpha=0.5)
-    ax[0].plot(time, x_avg, label='avg', alpha=0.5, color='orange')
+    ax[0].plot(time, x, label='raw', alpha=0.5, linewidth=2)
+    ax[0].plot(time, x_avg, label='avg', alpha=0.5, color='orange', linewidth=2)
 
     # Adding dashed rectangle around zoomed area
     zoom_start_index = len(x) // 2
-    zoom_end_index = zoom_start_index + 90 * 48
+    zoom_end_index = zoom_start_index + zoom_length * 48
     xy = (time[zoom_start_index], x_avg[zoom_start_index:zoom_end_index].min())
     w = time[zoom_end_index] - time[zoom_start_index]
     h = x_avg[zoom_start_index:zoom_end_index].max() - x_avg[zoom_start_index:zoom_end_index].min()
@@ -352,15 +381,16 @@ def show_kepler_sample(file_path, title, save_path, numpy=True):
     ax[1].set_ylim([x_avg.min(), x_avg.max()])
     ax[0].set_xlabel('Time (Days)')
     ax[0].set_ylabel('Normalized Flux')
+    ax[1].set_xlabel("Time (Days)")
     # ax[1].set_xlabel('Time (Days)')
     # ax[1].set_ylabel('Normalized Flux')
-    fig.suptitle(title, fontsize=14)
+    fig.suptitle(title, fontsize=20)
     ax[0].legend()
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
 
-def Teff_analysis(kepler_inference, T_df, refs, refs_names, save_dir='../imgs'):
+def Teff_analysis(kepler_inference, T_df, refs, refs_names, save_dir='../imgs', log_y=False):
     merged_df = kepler_inference.merge(T_df, on='KID')
     merged_df.rename(columns=lambda x: x.rstrip('_x'), inplace=True)
     p_err_model = np.vstack([merged_df['period model error lower'].values[None],
@@ -369,14 +399,40 @@ def Teff_analysis(kepler_inference, T_df, refs, refs_names, save_dir='../imgs'):
         suffix = '_' + name
         merged_df = merged_df.merge(ref, on='KID', suffixes=(None, suffix))
         ref_std = np.std(merged_df[f'Prot_{name}'])
-        plt.scatter(merged_df['Teff'], merged_df[f'Prot_{name}'], label=f'{name}', alpha=0.3)
-    plt.scatter(merged_df['Teff'], merged_df['predicted period'], label=f'model',
+        p = merged_df[f'Prot_{name}'] if not log_y else np.log(merged_df[f'Prot_{name}'])
+        plt.scatter(merged_df['Teff'], p, label=f'{name}', alpha=0.3)
+    p = merged_df['predicted period'] if not log_y else np.log(merged_df['predicted period'])
+    plt.scatter(merged_df['Teff'], p, label=f'model',
                 c=merged_df['period confidence'], alpha=0.5)
     plt.xlabel('Teff(K)')
+    plt.gca().invert_xaxis()
     plt.ylabel('Period(Days)')
     plt.legend()
     plt.savefig(f'{save_dir}/Teff_P.png')
     plt.show()
+
+
+def plot_difference_hist(model_df, save_dir='../imgs'):
+    print("diff hist for ", len(model_df), " samples")
+    diff_columns = model_df.filter(regex='^diff_\d+_\d+$')
+
+    diff_values = diff_columns.melt(value_name='diff').dropna()['diff']
+    mu, std = norm.fit(diff_values)
+
+    avg_diff = diff_values.mean()
+
+    plt.figure()
+    plt.hist(diff_values, bins=40, density=True, edgecolor='black', alpha=0.7, label=f'Average - {avg_diff:.2f}')
+    xmin, xmax = plt.xlim()
+    x = np.linspace(xmin, xmax, 1000)
+    p = norm.pdf(x, mu, std)
+    plt.plot(x, p, color='orange', linewidth=2)
+    plt.xlabel('Period Pair Difference (Days)')
+    plt.ylabel('Frequency')
+    plt.savefig(f'{save_dir}/diff_hist.png')
+    plt.show()
+
+
 
 def plot_consistency_hist(model_df, other_df, suffix='', save_dir='../imgs'):
     plt.hist(model_df['std_p'], bins=20, histtype='step',density=True, label=f'LightPred ({model_df['std_p'].mean():.2f} Days)')
@@ -385,6 +441,23 @@ def plot_consistency_hist(model_df, other_df, suffix='', save_dir='../imgs'):
     plt.ylabel("Density")
     plt.legend()
     plt.savefig(f"{save_dir}/std_consistency_hist_{suffix}.png")
+    plt.close()
+
+    plt.hist(other_df['sigma error'],
+             bins=np.linspace(0,10,40),
+             histtype='step', density=True,
+             label=f'ACF ({other_df['sigma error'].mean():.2f})',
+             linewidth=3)
+    plt.hist(model_df['sigma error'], bins=np.linspace(0,10,40),
+             histtype='step',
+             density=True,
+             label=f'LightPred ({model_df['sigma error'].mean():.2f} Days)',
+             linewidth=3)
+    plt.xlabel(r"Observational Error (Days)")
+    plt.ylabel("Density")
+    plt.ylim(-0.1, None)
+    plt.legend()
+    plt.savefig(f"{save_dir}/sigma_err_{suffix}.png")
     plt.close()
 
     plt.hist(model_df['max_diff'], bins=20, histtype='step',density=True, label=f'LightPred ({model_df['max_diff'].mean():.2f} Days)')
@@ -481,6 +554,47 @@ def plot_confusion_matrix(res_df, model_name, save_name, n_lags=7):
     plt.savefig(f"../imgs/{save_name}.png")
     plt.show()
 
+
+def simulation_vs_observational_error(df, save_dir='../imgs'):
+    # df['simulation error'] = (df['simulation error']
+    #                           + df['simulation error lower'])
+    aggregated_errors = df.groupby('simulation error')[
+        ['observational error', 'predicted period']].mean().reset_index()
+    plt.scatter(aggregated_errors['simulation error'], aggregated_errors['observational error'],
+                c=aggregated_errors['predicted period'], s=100)
+    plt.xlabel(r'Simulation Error (Days)')
+    plt.ylabel(r'Observational Error (Averaged over period bins)')
+    plt.colorbar(label='Predicted Period (Days)')
+    plt.savefig(f"{save_dir}/simulation_vs_true_error.png")
+    plt.show()
+
+    print("nubmer of all samples :", len(df))
+    aggregated_errors = aggregated_errors[aggregated_errors['predicted period'] < 25]
+    print("number of samples under 25: ", len(df[df['predicted period'] < 25]))
+
+    plt.scatter(aggregated_errors['simulation error'], aggregated_errors['observational error'],
+                c=aggregated_errors['predicted period'], s=100)
+    plt.plot(aggregated_errors['simulation error'], 2*aggregated_errors['simulation error'], color='r')
+    plt.xlabel('Simulation Error (Days)')
+    plt.ylabel('Observational Error (Averaged over period bins)')
+    plt.colorbar(label='Predicted Period (Days)')
+    plt.savefig(f"{save_dir}/simulation_vs_true_error_short_p.png")
+    plt.show()
+
+    # plt.scatter(aggregated_errors['simulation error'], aggregated_errors['predicted period'], label='simulation error')
+    # plt.scatter(aggregated_errors['error'], aggregated_errors['predicted period'], label='std error')
+    # plt.xlabel('simulation error (Days)')
+    # plt.ylabel('Predicted Period (Days)')
+    # plt.legend()
+    # plt.savefig(f"{save_dir}/simulation_and_std_err_vs_p.png")
+    # plt.show()
+    #
+    # plt.scatter(aggregated_errors['predicted period'], np.abs(aggregated_errors['simulation error']
+    #                                                           - aggregated_errors['error']), )
+    # plt.xlabel('|simulation error - std error| (Days)')
+    # plt.ylabel('Predicted Period (Days)')
+    # plt.savefig(f"{save_dir}/error_diff_vs_p.png")
+    # plt.show()
 def scatter_kois(dfs, labels, opacities, colors, dir='../imgs'):
     """
     scatter plot of kois. all lists (dfs, labels, opacities, colors) should the same size
@@ -515,5 +629,32 @@ def scatter_conf(kepler_inference, other_att, att='inclination'):
     plt.xlabel(other_att)
     plt.ylabel(f'{other_att} confidence')
     plt.savefig(os.path.join('../imgs', f'{other_att}_conf_vs_{other_att}.png'))
+    plt.show()
+
+def plot_mock_results(df_path, save_path='../mock_imgs'):
+    fig, ax = plt.subplots(1,2, figsize=(20,10))
+    df = pd.read_csv(df_path)
+    df_noise = df[df.apply(lambda x: 'Noisy' in x['Model'], axis=1)]
+    df_noise['Model'] = df_noise['Model'].apply(lambda x: 'LightPred' if 'LightPred' in x else x)
+    df_noise['Model'] = df_noise['Model'].apply(lambda x: '-'.join(x.replace('Noisy', '').split()) if 'Noisy' in x else x)
+    ax[0].scatter(df_noise['Model'], df_noise['Acc10p (%)'], s=500, marker='*', color='r', label='acc 10%')
+    ax[0].scatter(df_noise['Model'], df_noise['Acc20p (%)'], s=500, marker='*', color='orange', label='acc 20%')
+    # ax[0].scatter(df_noiseless['Model'], df_noiseless['Acc10p (%)'], s=40, color='brown', label='Noisy')
+    # ax[0].set_xticklabels(df_noise['Model'], rotation=90)
+    ax[0].set_ylabel('Accuracy (%)', fontsize=22)
+    # ax[0].set_xlabel('Model', fontsize=18)
+    ax[0].set_xticklabels(df_noise['Model'], fontsize=22)
+    ax[0].legend()
+    # ax[0].set_yticklabels(, fontsize=22)
+
+    df_noise.dropna(inplace=True)
+    ax[1].scatter(df_noise['Model'], df_noise['Average Error (Days)'],s=500, marker='*', color='r')
+    ax[1].set_xticklabels(df_noise['Model'], fontsize=22)
+    # ax[1].set_yticklabels(df_noise['Average Error (Days)'], fontsize=22)
+    ax[1].set_ylabel('Mean Absolute Error (Days)', fontsize=22)
+    # ax[1].set_xlabel('Model', fontsize=18)
+    # set x label common to ax[0] and ax[1]
+
+    plt.savefig(f"{save_path}/mock_compare.png")
     plt.show()
 
