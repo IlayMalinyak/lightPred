@@ -18,9 +18,10 @@ import pandas as pd
 from utils import read_fits
 
 mpl.rcParams['axes.linewidth'] = 4
-plt.rcParams.update({'font.size': 22, 'figure.figsize': (14,10), 'lines.linewidth': 4})
+plt.rcParams.update({'font.size': 30, 'figure.figsize': (14,10), 'lines.linewidth': 4})
 mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=["gray", "r", "c", 'm', 'brown'])
 plt.rcParams.update({'xtick.labelsize': 22, 'ytick.labelsize': 22})
+plt.rcParams.update({'legend.fontsize': 22})
 
 def nice_ticks(data_length, num_ticks=4, start=10000):
     ticks = np.linspace(start, data_length, num_ticks )
@@ -210,7 +211,7 @@ def compare_period(df_inference, df_compare, p_att='Prot', ref_name='Reinhold202
     ax.plot([0, max_val], [0, max_val//2], color='orange', linewidth=1)
 
     # Add labels
-    g.set_axis_labels(f'{ref_name} Period (Days)', f'LightPred Period (Days)', fontsize=12)
+    g.set_axis_labels(f'{ref_name} Period (Days)', f'LightPred Period (Days)', fontsize=30)
 
     # Add color bar
     norm = plt.Normalize(merged_df['period confidence'].min(), merged_df['period confidence'].max())
@@ -218,7 +219,7 @@ def compare_period(df_inference, df_compare, p_att='Prot', ref_name='Reinhold202
     sm.set_array([0.8])
 
     # Adjust color bar position to avoid overlapping with marginal plots
-    cbar_ax = g.fig.add_axes([.91, .25, .02, .5])  # [left, bottom, width, height]
+    cbar_ax = g.fig.add_axes([.9, .25, .02, .5])  # [left, bottom, width, height]
     cbar = g.fig.colorbar(sm, cax=cbar_ax)
     cbar.set_label('Confidence')
 
@@ -455,7 +456,6 @@ def plot_consistency_hist(model_df, other_df, suffix='', save_dir='../imgs'):
              linewidth=3)
     plt.xlabel(r"Observational Error (Days)")
     plt.ylabel("Density")
-    plt.ylim(-0.1, None)
     plt.legend()
     plt.savefig(f"{save_dir}/sigma_err_{suffix}.png")
     plt.close()
@@ -563,7 +563,7 @@ def simulation_vs_observational_error(df, save_dir='../imgs'):
     plt.scatter(aggregated_errors['simulation error'], aggregated_errors['observational error'],
                 c=aggregated_errors['predicted period'], s=100)
     plt.xlabel(r'Simulation Error (Days)')
-    plt.ylabel(r'Observational Error (Averaged over period bins)')
+    plt.ylabel(r'Obs. Error (Averaged over bins) (Days)')
     plt.colorbar(label='Predicted Period (Days)')
     plt.savefig(f"{save_dir}/simulation_vs_true_error.png")
     plt.show()

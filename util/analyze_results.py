@@ -331,11 +331,13 @@ def mass_binning(kepler_inference, catalog, m_bins=[0,1,1.4], save_dir='../imgs'
     # m_bins = np.linspace(df['Mstar'].min(), df['Mstar'].max(), n_bins)
     for i,b in enumerate(m_bins[:-1]):
         sub_df = df[(df['Mstar'] >= b) & (df['Mstar'] < m_bins[i+1])]
+        label = fr'${b:.2f}*M_\odot < M < {m_bins[i+1]:.2f}*M_\odot$, avg error (Days)'\
+            f'-{sub_df['sigma error'].mean():.2f}'  if i > 0 else fr'M < {m_bins[i+1]:.2f}*M_\odot$, '\
+             f'avg error (Days)-{sub_df['sigma error'].mean():.2f}'
         plt.hist(sub_df['predicted period'], histtype='step',
                  density=True,
                  bins=np.linspace(0,40,40),
-                 label=fr'${b:.2f}*M_\odot < M < {m_bins[i+1]:.2f}*M_\odot$, avg error (Days)'
-                       f'-{sub_df['sigma error'].mean():.2f}',
+                 label=label,
                  linewidth=3)
         print("avg sigma error: ", sub_df['sigma error'].mean())
     sub_df = df[df['Mstar'] >= m_bins[-1]]
@@ -346,8 +348,8 @@ def mass_binning(kepler_inference, catalog, m_bins=[0,1,1.4], save_dir='../imgs'
              linewidth=3)
     print("avg sigma error: ", sub_df['sigma error'].mean())
     plt.legend(fontsize='small')
-    plt.xlabel('Predicted Period (Days)')
-    plt.ylabel('Density')
+    plt.xlabel('Predicted Period (Days)', fontsize=30)
+    plt.ylabel('Density', fontsize=30)
     plt.savefig(f'{save_dir}/mass_bins.png')
     plt.show()
 
@@ -358,8 +360,8 @@ def period_mass_bin(kepler_inference, catalog, m=1, save_dir='../imgs'):
     plt.hexbin(sub_df['predicted period'], sub_df['sigma error'], mincnt=1)
     plt.title(fr'${m*0.9:.2f}*M_\odot < M < {m*1.1:.2f}*M_\odot$ ({len(sub_df)} samples)')
     print("avg sigma error in bin: ", sub_df['sigma error'].mean())
-    plt.xlabel('Predicted Period (Days)')
-    plt.ylabel('Observational Error (Days)')
+    plt.xlabel('Predicted Period (Days)', fontsize=30)
+    plt.ylabel('Observational Error (Days)', fontsize=30)
     plt.savefig(f'{save_dir}/p_mass_bin.png')
     plt.show()
 
@@ -1276,10 +1278,10 @@ def plot_kepler_inference(kepler_inference, low_p_acf, save_dir):
     hist(kepler_inference, df_other=high_conf_inference,
          other_name='high conf', save_name='high_conf')
 
-    # compare_non_consistent_samples(r'..\non_consistent_group1',
-    #                                kepler_inference, ref1, 'McQ14')
-    # compare_non_consistent_samples(r'..\non_consistent_group2',
-    #                                kepler_inference, ref1, 'McQ14')
+    compare_non_consistent_samples(r'..\non_consistent_group1',
+                                   kepler_inference, ref1, 'McQ14')
+    compare_non_consistent_samples(r'..\non_consistent_group2',
+                                   kepler_inference, ref1, 'McQ14')
     ref2 = pd.read_csv('tables/reinhold2023.csv')
     compare_period(kepler_inference, ref2, ref_name='Reinhold23', save_dir=save_dir)
     ref3 = pd.read_csv('tables/santos21.csv')
@@ -1350,151 +1352,6 @@ def create_final_predictions(df_path, low_p_acf=False):
     print("number of all samples: ", len(kepler_inference_clean))
     print("number of ACF predictions: ", len(kepler_inference_clean[kepler_inference_clean['method']=='ACF']))
 
-def gold_silver_metal_inference(df_path, num_segments=7):
-    if not os.path.exists('../imgs/gold'):
-        os.mkdir('../imgs/gold')
-    if not os.path.exists('../imgs/silver'):
-        os.mkdir('../imgs/silver')
-    if not os.path.exists('../imgs/metal'):
-        os.mkdir('../imgs/metal')
-    num_pairs = comb(num_segments, 2)
-    kepler_inference = pd.read_csv(df_path)
-    gold_subset = aggregate_results(kepler_inference[kepler_inference['total_acc'] == num_pairs])
-    silver_subset = aggregate_results(kepler_inference[kepler_inference['total_acc'] >= int(2*num_pairs/3)])
-    metal_subset = aggregate_results(kepler_inference[kepler_inference['total_acc'] >= int(num_pairs/3)])
-    print(f"gold: {len(gold_subset)} samples, silver: {len(silver_subset)} samples, metal: {len(metal_subset)} samples")
-    plot_kepler_inference(gold_subset, save_dir='../imgs/gold')
-    plot_kepler_inference(silver_subset, save_dir='../imgs/silver')
-    plot_kepler_inference(metal_subset, save_dir='../imgs/metal')
-
-    plt.hist(gold_subset['predicted period'], histtype='step', bins=40, density=True, label='High')
-    plt.hist(silver_subset['predicted period'], histtype='step', bins=40, density=True, label='Mid')
-    plt.hist(metal_subset['predicted period'], histtype='step', bins=40, density=True, label='All')
-    plt.xlabel("Period (Days)")
-    plt.ylabel('Density')
-    plt.legend()
-    plt.savefig("../imgs/gold_silver_metal_dists.png")
-
-    gold_subset.to_csv('tables/gold.csv')
-    silver_subset.to_csv('tables/silver.csv')
-    metal_subset.to_csv('tables/metal.csv')
-
-    kepler_inference = kepler_inference.round(decimals=2).sort_values(by='KID')
-    kepler_inference['confidence group'] = 'all'
-    kepler_inference['confidence group'][kepler_inference['KID'].isin(silver_subset['KID'])] = 'Medium'
-    kepler_inference['confidence group'][kepler_inference['KID'].isin(gold_subset['KID'])] = 'High'
-    kepler_inference.to_csv("tables/kepler_predictions_groups.csv", index=False)
-
-
-    kepler_inference_clean = kepler_inference[['KID', 'Teff', 'R', 'logg',
-                                               'predicted period', 'period model error lower',
-                                               'period model error upper', 'confidence group']]
-    kepler_inference_clean.to_csv("tables/kepler_predictions_groups_clean.csv", index=False)
-
-def real_inference():
-    """
-    inference on kepler data
-    """
-
-    mock_eval = prepare_df(pd.read_csv(r"..\mock_eval\eval_astroconf_exp47.csv"),
-                           filter_giants=False, filter_eb=False, teff_thresh=False)
-    errs_p, mean_p, std_df_p = calculate_error_bars(mock_eval['Period'], mock_eval['predicted period'], max_val=60)
-    std_df_p.to_csv('tables/err_df_p.csv')
-    errs_i, mean_i, std_df_i = calculate_error_bars(mock_eval['Inclination'],
-                                                    mock_eval['predicted inclination'], max_val=90)
-    std_df_i.to_csv('tables/err_df_i.csv')
-    # kepler_eval = pd.read_csv("kepler/kepler_eval2.csv")
-    sample_kois = prepare_kois_sample(['tables/albrecht2022_clean.csv', 'tables/morgan2023.csv', 'tables/win2017.csv'])
-    sample_kois.to_csv('tables/all_refs.csv')
-
-    kepler_inference = read_csv_folder('../inference/astroconf_exp45_ssl',
-                                       filter_thresh=6,
-                                       )
-
-    kepler_inference = kepler_inference[kepler_inference['predicted period'] > 2]
-    # kepler_inference = kepler_inference[kepler_inference['inclination confidence'] > 0.96]
-
-
-
-    # print("number of samples for period: ", len(kepler_inference))
-    # print("minimum period", kepler_inference['predicted period'].min())
-    # kepler_inference.to_csv('../inference/astroconf_exp51_ssl_finetune_thresh_2_days.csv')
-    # exp_45_df = pd.read_csv('../inference/astroconf_exp45_ssl_thresh_6_days.csv')
-    # avg_diff, std_diff = ssl_vs_finetune(kepler_inference, exp_45_df)
-    # print(f"differences between exp 51 and exp 45: mean {avg_diff}, std {std_diff}")
-    # plot_subset(kepler_inference, mock_eval)
-    # get_optimal_confidence(mock_eval)
-
-    # find_non_ps(kepler_inference)
-
-    print("len df: ", len(kepler_inference))
-
-    # compare_period_distributions(kepler_inference, [ref, ref2], refs_names=['Mazeh', 'Reinholds'],
-    #                              save_name='p_compare_all')
-
-
-
-
-    # scatter_conf(kepler_inference, 'Teff')
-    # scatter_conf(kepler_inference, 'predicted inclination')
-    # plt.scatter(kepler_inference['predicted period'], kepler_inference['predicted inclination'])
-    # plt.savefig("../imgs/period_inc.png")
-    # plt.show()
-
-
-    # prad_plot(merged_df_kois, window_size=0.1)
-
-    # plt.scatter(kepler_inference['Teff'], kepler_inference['predicted inclination'],)
-    # plt.xlabel('Teff')
-    # plt.ylabel('predicted inclination')
-    # plt.show()
-    # plt.close()
-
-
-    # merged_df_hj = merged_df_kois[(merged_df_kois['koi_prad'] > J_radius_factor)
-    #                               & (merged_df_kois['planet_Prot'] < prot_hj)]
-    # merged_df_warm_hj = merged_df_kois[(merged_df_kois['koi_prad'] > J_radius_factor)
-    #                                    & (merged_df_kois['planet_Prot'] > prot_hj)
-    #                                    & (merged_df_kois['planet_Prot'] < 100)]
-
-    # merged_df_kois_small = merged_df_kois[merged_df_kois['planet_Prot'] < prot_hj]
-
-    high_p_inc = kepler_inference[kepler_inference['predicted period'] > 10]
-    high_p_kois = merged_df_kois[merged_df_kois['predicted period'] > 10]
-
-    # _, ks_test_kois = ks_2samp(kepler_inference['predicted inclination'],
-    #                            merged_df_kois['predicted inclination'])
-    print("ks test kois- ", ks_test_kois)
-    hist(kepler_inference, save_name='inc_clean', att='predicted inclination', theoretical='cos')
-    hist(high_p_inc, save_name='inc_high_p', att='predicted inclination', theoretical='cos', label='period > 10 days')
-    hist(kepler_inference, save_name='inc_hj', att='predicted inclination',
-         df_other=merged_df_hj, other_name='hj')
-    hist(high_p_inc, save_name='inc_kois', att='predicted inclination',
-         df_other=high_p_kois, other_name='kois')
-    hist(kepler_inference, save_name='period_hj', att='predicted period',
-         df_mazeh=None, df_other=merged_df_hj, other_name='hj')
-    hist(kepler_inference, save_name='period', att='predicted period',
-         )
-
-    threshold_hist(kepler_inference, thresh_att='confidence',
-                   thresh=[0.9,0.95, 0.96,0.97, 0.98], save_name='inc_pconf')
-    threshold_hist(kepler_inference, thresh_att='inclination confidence',
-                   thresh=[0.9, 0.94, 0.96, 0.98], save_name='inc_conf')
-    threshold_hist(kepler_inference, thresh_att='predicted period',
-                   thresh=[10,5,3,2.5,2,0],  save_name='inc_p')
-    threshold_hist(kepler_inference, thresh_att='predicted period',
-                   thresh=[2,3,5,10,20],save_name='inc_p', sign='small')
-    threshold_hist(kepler_inference, att='predicted inclination',
-                   thresh_att='Teff', thresh=[4500,5000] + list(np.arange(6000,6800,200)), save_name='inc_t')
-    threshold_hist(kepler_inference, att='predicted period',
-                   thresh_att='Teff', thresh=[4500,5000,5500,6000,6500,6700], save_name='p_t')
-    threshold_hist(kepler_inference, att='predicted period', thresh_att='period confidence',
-                thresh=[0.95,0.96,0.97,0.98,0.99], save_name='p_conf')
-
-
-    # inc_t_kois(kepler_inference_56, merged_df_kois)
-
-
 def aggregate_dfs_from_gpus(folder_name, num_qs=7, num_ranks=4, file_name='kepler_inference_full'):
     if not os.path.exists(f'../inference/{folder_name}'):
         os.mkdir(f'../inference/{folder_name}')
@@ -1508,24 +1365,6 @@ def aggregate_dfs_from_gpus(folder_name, num_qs=7, num_ranks=4, file_name='keple
                 (f'../inference/{folder_name}_ranks/'
                  f'{file_name}_{q}_rank_{rank}.csv')], ignore_index=True)
         df.to_csv(f'../inference/{folder_name}/{file_name}_{q}.csv', index=False)
-def prad_plot(merged_df_kois, window_size, dir='../imgs'):
-    small_pr = merged_df_kois[(merged_df_kois['koi_prad'] < 10) & (merged_df_kois['planet_Prot'] < 100)]
-
-    # Calculate the window size in terms of data points corresponding to 0.5 earth radii
-
-    moving_avg_df = calculate_moving_average(small_pr, window_size)
-
-    # Plot the scatter plot and moving average
-    plt.hexbin(moving_avg_df['koi_prad'], moving_avg_df['predicted inclination'], cmap='viridis', mincnt=1, label='Data')
-    plt.plot(moving_avg_df['koi_prad'], moving_avg_df['moving_avg'], color='red',
-             label=f'Moving Average', linestyle='--')
-    plt.xlabel('planet radius (earth radii)')
-    plt.ylabel("predicted inclination (degrees)")
-    plt.legend()
-    plt.colorbar(label='Density')
-    plt.savefig(os.path.join(dir, 'prad_inc.png'))
-    plt.show()
-
 def mock_inference(name, prepare=False):
     mock_eval = pd.read_csv(f'../mock_eval/eval_astroconf_{name}.csv')
     columns_to_lower = [col for col in mock_eval.columns
@@ -1674,6 +1513,12 @@ def add_teff(df_dir, teff_dir):
 
 
 if __name__ == "__main__":
+    # aigrian_test()
+    # plot_mock_results('../mock_imgs/aigrain_test.csv')
+    # compare_consistency(None, None, None,
+    #                     model_path='tables/kepler_model_pred_exp45.csv',
+    #                     acf_path='tables/kepler_acf_pred.csv',
+    #                     gps_path='tables/kepler_gps_pred.csv')
     create_final_predictions('tables/kepler_model_pred_exp45.csv', low_p_acf=True)
 
 
