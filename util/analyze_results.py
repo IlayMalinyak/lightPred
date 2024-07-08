@@ -572,10 +572,21 @@ def prepare_df(df, scale=False, filter_giants=True,
     return df
 
 
+
+
 def create_errorbars(err_df):
     lower_bound = np.clip(err_df['mean'], a_min=0, a_max=None)
     upper_bound = err_df['mean']
     return lower_bound, upper_bound
+
+def create_simulation_errors(df):
+    err_model_p = pd.read_csv('tables/err_df_p.csv')
+    rounded_p = np.round(df['predicted period']).astype(int)
+    rounded_p = np.clip(rounded_p, a_min=0, a_max=len(err_model_p) - 1)
+    p_errors = err_model_p.iloc[rounded_p]
+    p_errors_lower, p_errors_upper = create_errorbars(p_errors)
+    df.loc[:, 'simulation error'] = p_errors_lower.values
+    return df
 def compare_inferences(inferences_list, qs, dir='../imgs'):
     root = inferences_list[0]
     plt.hist(root['sin predicted inclination'], density=True, histtype='step', bins=20, label=f'qs {qs[0]}')
@@ -1278,10 +1289,10 @@ def plot_kepler_inference(kepler_inference, low_p_acf, save_dir):
     hist(kepler_inference, df_other=high_conf_inference,
          other_name='high conf', save_name='high_conf')
 
-    compare_non_consistent_samples(r'..\non_consistent_group1',
-                                   kepler_inference, ref1, 'McQ14')
-    compare_non_consistent_samples(r'..\non_consistent_group2',
-                                   kepler_inference, ref1, 'McQ14')
+    # compare_non_consistent_samples(r'..\non_consistent_group1',
+    #                                kepler_inference, ref1, 'McQ14')
+    # compare_non_consistent_samples(r'..\non_consistent_group2',
+    #                                kepler_inference, ref1, 'McQ14')
     ref2 = pd.read_csv('tables/reinhold2023.csv')
     compare_period(kepler_inference, ref2, ref_name='Reinhold23', save_dir=save_dir)
     ref3 = pd.read_csv('tables/santos21.csv')
@@ -1335,13 +1346,12 @@ def set_low_p(kepler_inference, other_df, other_att='Prot', threshold=4, ref_nam
 
 def create_final_predictions(df_path, low_p_acf=False):
     kepler_inference = aggregate_results(pd.read_csv(df_path))
+    kepler_inference = create_simulation_errors(kepler_inference)
+    simulation_vs_observational_error(kepler_inference)
     kepler_inference['method'] = 'LightPred'
     plot_kepler_inference(kepler_inference, low_p_acf=low_p_acf, save_dir='../imgs')
     kepler_inference = kepler_inference.round(decimals=3).sort_values(by='KID')
-    kepler_inference.rename(columns={'sigma error':'observational error',
-                             'period model error lower': "simulation error lower",
-                             'period model error upper': "simulation error"}, inplace=True)
-    simulation_vs_observational_error(kepler_inference)
+    kepler_inference.rename(columns={'sigma error':'observational error'}, inplace=True)
     kepler_inference_clean = kepler_inference[['KID', 'Teff', 'R', 'logg',
                                                'predicted period', 'observational error',
                                                'simulation error', 'period confidence',
@@ -1515,7 +1525,7 @@ def add_teff(df_dir, teff_dir):
 if __name__ == "__main__":
     # aigrian_test()
     # plot_mock_results('../mock_imgs/aigrain_test.csv')
-    # compare_consistency(None, None, None,
+    # compare_consistency('../inference/astroconf_exp45_ssl', None, None,
     #                     model_path='tables/kepler_model_pred_exp45.csv',
     #                     acf_path='tables/kepler_acf_pred.csv',
     #                     gps_path='tables/kepler_gps_pred.csv')
