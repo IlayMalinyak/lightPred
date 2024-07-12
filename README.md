@@ -12,10 +12,8 @@ LightPred is a deep learning model to learn stellar period and inclination
 using self supervised and simulation based learning. 
 
 ![alt text](https://github.com/ilayMalinyak/lightPred/blob/master/images/lightPred.drawio.png?raw=true)
-*high level architecture.*
 > 
 ![alt text](https://github.com/ilayMalinyak/lightPred/blob/master/images/period_exp47_scatter.png?raw=true)
-*period results on simulations.*
 
 ## Setup Environment
 
